@@ -18,9 +18,9 @@ jobs:
     name: build, vet, test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           # From go.mod, so the toolchain cannot drift away from what the module
           # declares it needs.
@@ -76,9 +76,9 @@ jobs:
     name: race detector
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
