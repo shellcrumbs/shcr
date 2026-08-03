@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/shellcrumbs/shcr/internal/config"
+	"github.com/shellcrumbs/shcr/internal/crypto"
 	"github.com/shellcrumbs/shcr/internal/daemon"
 	"github.com/shellcrumbs/shcr/internal/event"
 	"github.com/shellcrumbs/shcr/internal/gitinfo"
@@ -25,6 +28,7 @@ import (
 	"github.com/shellcrumbs/shcr/internal/redact"
 	"github.com/shellcrumbs/shcr/internal/shell"
 	"github.com/shellcrumbs/shcr/internal/store"
+	syncengine "github.com/shellcrumbs/shcr/internal/sync"
 	"github.com/shellcrumbs/shcr/internal/theme"
 	"github.com/shellcrumbs/shcr/internal/tui"
 )
@@ -44,6 +48,12 @@ func main() {
 		err = cmdDaemon(os.Args[2:])
 	case "event":
 		err = cmdEvent(os.Args[2:])
+	case "nudge":
+		// Best effort by design: no daemon means nothing to tell, and the shell
+		// must never see an error for it.
+		if len(os.Args) > 2 {
+			_ = ipc.Nudge(os.Args[2])
+		}
 	case "init":
 		err = cmdInit(os.Args[2:])
 	case "tui":
@@ -52,6 +62,10 @@ func main() {
 		err = cmdList(os.Args[2:])
 	case "stats":
 		err = cmdStats(os.Args[2:])
+	case "key":
+		err = cmdKey(os.Args[2:])
+	case "sync":
+		err = cmdSync(os.Args[2:])
 	case "redact":
 		err = cmdRedact(os.Args[2:])
 	case "version", "--version", "-v":
@@ -80,13 +94,21 @@ usage: shcr <command> [flags]
   tui                    the Ctrl+R picker; prints the chosen command
   list                   show recorded commands
   stats                  summarise what has been recorded
+  key init|show|import   manage the end-to-end encryption key
+  sync now|status|enable cross-machine sync
   redact <id>            replace a recorded command with a tombstone
   event start|end        record an event (called by the shell hooks)
+  nudge <reason>         tell the daemon a sync is worthwhile (called by the hooks)
   version
 
 getting started:
   eval "$(shcr init bash)"      # add to ~/.bashrc
   shcr daemon &                 # or run under systemd
+
+second machine:
+  shcr key show                 # on the first machine, write the words down
+  shcr key import               # on the new one
+  shcr sync enable --dir <shared-bucket-dir>
 `)
 }
 
@@ -129,6 +151,47 @@ func cmdDaemon(args []string) error {
 	defer stop()
 
 	d := daemon.New(st, deviceID, logger, redactor())
+
+	// Sync runs alongside capture when it is configured, and is woken by local
+	// activity rather than only by its own timer.
+	//
+	// The loop starts whenever a backend exists, not only when sync is switched
+	// on, and asks the configuration again before each cycle. Deciding once at
+	// startup meant the dashboard's sync toggle did nothing until the daemon was
+	// restarted, with no indication that was what it was waiting for.
+	if cfg, err := config.Load(); err != nil {
+		logger.Printf("config: %v", err)
+	} else if cfg.Sync.Backend != "" {
+		// syncEngineWith, not syncEngine: the latter opens a database of its own,
+		// which this would then drop on the floor while holding it open for the
+		// life of the daemon.
+		engine, err := syncEngineWith(st)
+		if err != nil {
+			logger.Printf("sync disabled: %v", err)
+		} else {
+			engine.Logger = logger
+			engine.Enabled = func() bool {
+				c, err := config.Load()
+				return err == nil && c.Sync.Enabled
+			}
+			engine.EnableTriggers()
+			d.OnTrigger = func(reason string) { engine.Trigger(syncengine.Trigger(reason)) }
+			// Coming up is itself worth a sync: the machine may have been off
+			// while other machines were busy.
+			engine.Trigger(syncengine.TriggerDaemonStart)
+			go func() {
+				if err := engine.Run(ctx, syncengine.DefaultLoopConfig()); err != nil && ctx.Err() == nil {
+					logger.Printf("sync loop stopped: %v", err)
+				}
+			}()
+			if cfg.Sync.Enabled {
+				logger.Printf("sync enabled (%s)", cfg.Sync.Path)
+			} else {
+				logger.Printf("sync is configured but switched off (%s); it will start when turned on",
+					cfg.Sync.Path)
+			}
+		}
+	}
 
 	return d.Run(ctx)
 }
@@ -240,7 +303,270 @@ func redactor() *redact.Redactor {
 
 // ---------------------------------------------------------------- key
 
+func cmdKey(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("key: want 'init', 'show' or 'import'")
+	}
+	ks := crypto.NewKeystore(paths.DataDir())
+
+	switch args[0] {
+	case "init":
+		if _, _, err := ks.Load(); err == nil {
+			return fmt.Errorf("a key already exists; `shcr key show` prints it, and replacing it would orphan everything already in the bucket")
+		}
+		k, err := crypto.GenerateKey()
+		if err != nil {
+			return err
+		}
+		src, err := ks.Save(k)
+		if err != nil {
+			return err
+		}
+		phrase, err := k.Phrase()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("A new encryption key was generated and stored in the %s.\n\n", src)
+		printPhrase(phrase)
+		fmt.Print("\nWrite these words down. They are the only way to read your history on\nanother machine, and nobody else can recover them for you.\n")
+		warnIfFile(src)
+		return nil
+
+	case "show":
+		fs := flag.NewFlagSet("key show", flag.ExitOnError)
+		reveal := fs.Bool("reveal", false, "actually print the recovery phrase")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		k, src, err := ks.Load()
+		if err != nil {
+			return err
+		}
+		if !*reveal {
+			fmt.Printf("A key is configured (stored in the %s).\n", src)
+			fmt.Println("Re-run with --reveal to print the recovery phrase.")
+			warnIfFile(src)
+			return nil
+		}
+		phrase, err := k.Phrase()
+		if err != nil {
+			return err
+		}
+		printPhrase(phrase)
+		warnIfFile(src)
+		return nil
+
+	case "import":
+		if _, _, err := ks.Load(); err == nil {
+			return fmt.Errorf("a key already exists on this machine; remove it first if you really mean to replace it")
+		}
+		fmt.Print("Paste the 24-word recovery phrase from your other machine:\n> ")
+		line, err := readSecretLine()
+		if err != nil && line == "" {
+			return err
+		}
+		k, err := crypto.KeyFromPhrase(line)
+		if err != nil {
+			return err
+		}
+		src, err := ks.Save(k)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Key accepted and stored in the %s.\n", src)
+		warnIfFile(src)
+		return nil
+	}
+	return fmt.Errorf("key: unknown subcommand %q", args[0])
+}
+
+// readSecretLine reads one line, without echoing it when the input is a
+// terminal. `key show` puts the same words behind --reveal; echoing them on the
+// way in leaves the key to the whole history in the terminal's scrollback, and
+// often in a session log or a screen share as well.
+func readSecretLine() (string, error) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		// Piped or redirected input is not echoed by anything in the first place.
+		return bufio.NewReader(os.Stdin).ReadString('\n')
+	}
+	b, err := term.ReadPassword(fd)
+	// ReadPassword consumes the newline without printing it, so the next line of
+	// output would otherwise run on from the prompt.
+	fmt.Println()
+	return string(b), err
+}
+
+func printPhrase(phrase string) {
+	words := strings.Fields(phrase)
+	for i, w := range words {
+		fmt.Printf("%2d. %-10s", i+1, w)
+		if (i+1)%4 == 0 {
+			fmt.Println()
+		}
+	}
+	if len(words)%4 != 0 {
+		fmt.Println()
+	}
+}
+
+func warnIfFile(src crypto.Source) {
+	if src == crypto.SourceFile {
+		fmt.Fprintf(os.Stderr,
+			"\nwarning: no OS keychain was available, so the key is in a 0600 file at\n"+
+				"         %s\n"+
+				"         Anyone who can read that file can read your synced history.\n",
+			crypto.NewKeystore(paths.DataDir()).FilePath)
+	}
+}
+
 // ---------------------------------------------------------------- sync
+
+func syncEngine() (*syncengine.Engine, error) {
+	st, err := openStore()
+	if err != nil {
+		return nil, err
+	}
+	e, err := syncEngineWith(st)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	return e, nil
+}
+
+// syncEngineWith builds the engine around an already-open database, so the
+// daemon and the web server do not each hold their own handle.
+func syncEngineWith(st *store.Store) (*syncengine.Engine, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Sync.Backend == "" {
+		return nil, fmt.Errorf("sync is not configured (run: shcr sync enable --dir <path>)")
+	}
+	if cfg.Sync.Backend != "file" {
+		return nil, fmt.Errorf("unknown sync backend %q", cfg.Sync.Backend)
+	}
+	storage, err := syncengine.NewFileStorage(cfg.Sync.Path)
+	if err != nil {
+		return nil, err
+	}
+	ks := crypto.NewKeystore(paths.DataDir())
+	deviceID, err := paths.DeviceID()
+	if err != nil {
+		return nil, err
+	}
+	host, _ := os.Hostname()
+	return &syncengine.Engine{
+		Store: st, Storage: storage,
+		// Resolved on first use, not here: a daemon under systemd starts before
+		// the keyring is unlocked.
+		KeyFunc:  func() (crypto.Key, error) { k, _, err := ks.Load(); return k, err },
+		DeviceID: deviceID, Hostname: host,
+		ShareHostname: cfg.Sync.ShareHostname,
+		Logger:        log.New(os.Stderr, "shcr: ", 0),
+	}, nil
+}
+
+func cmdSync(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("sync: want 'now', 'status' or 'enable'")
+	}
+	switch args[0] {
+	case "enable":
+		fs := flag.NewFlagSet("sync enable", flag.ExitOnError)
+		dir := fs.String("dir", "", "directory to use as the bucket")
+		shareHost := fs.Bool("share-hostname", false, "put a hostname hint in the manifest (visible to the storage provider)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *dir == "" {
+			return fmt.Errorf("sync enable: --dir is required")
+		}
+		abs, err := filepath.Abs(*dir)
+		if err != nil {
+			return err
+		}
+		ks := crypto.NewKeystore(paths.DataDir())
+		if _, _, err := ks.Load(); err != nil {
+			return fmt.Errorf("no encryption key yet: run `shcr key init` (or `shcr key import` on a second machine) first")
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		cfg.Sync = config.Sync{Enabled: true, Backend: "file", Path: abs, ShareHostname: *shareHost}
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Printf("Sync enabled, using %s\n", abs)
+		fmt.Println("Restart the daemon to pick this up, or run `shcr sync now`.")
+		return nil
+
+	case "now":
+		e, err := syncEngine()
+		if err != nil {
+			return err
+		}
+		defer e.Store.Close()
+		pushed, pulled, err := e.SyncOnce(context.Background())
+		if err != nil {
+			return err
+		}
+		fmt.Printf("pushed %d event(s), pulled %d event(s)\n", pushed, pulled)
+		return nil
+
+	case "status":
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		st, err := openStore()
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		deviceID, _ := paths.DeviceID()
+
+		th := theme.New(os.Stdout)
+		pending, err := st.CountUnsynced(deviceID)
+		if err != nil {
+			return err
+		}
+		backend := "not configured"
+		if cfg.Sync.Backend != "" {
+			backend = fmt.Sprintf("%s backend at %s", cfg.Sync.Backend, cfg.Sync.Path)
+		}
+		for _, row := range [][2]string{
+			{"sync", backend},
+			{"device", deviceID + " (this machine)"},
+			{"pending", fmt.Sprintf("%d event(s) waiting to upload", pending)},
+		} {
+			fmt.Printf("%s  %s\n", th.Label.Render(fmt.Sprintf("%-8s", row[0])), row[1])
+		}
+
+		cursors, err := st.Cursors()
+		if err != nil {
+			return err
+		}
+		if len(cursors) == 0 {
+			fmt.Printf("%s  %s\n", th.Label.Render(fmt.Sprintf("%-8s", "peers")), th.Muted.Render("none seen yet"))
+			return nil
+		}
+		fmt.Println(th.Label.Render(fmt.Sprintf("%-8s", "peers")))
+		for _, c := range cursors {
+			name := c.HostnameHint
+			if name == "" {
+				name = "(unnamed)"
+			}
+			fmt.Printf("  %-38s %-16s %s\n", c.PeerDeviceID, name,
+				th.Muted.Render("last synced "+time.UnixMilli(c.LastSyncedAt).Format("2006-01-02 15:04")))
+		}
+		return nil
+	}
+	return fmt.Errorf("sync: unknown subcommand %q", args[0])
+}
 
 // ---------------------------------------------------------------- import
 
