@@ -1,0 +1,18 @@
+Fonts bundled with the shellcrumbs dashboard
+============================================
+
+These files are embedded in the binary so the dashboard renders identically
+offline and makes no outbound request when opened. Fetching them from a CDN
+would tell a third party each time you look at your own shell history.
+
+JetBrains Mono  — jetbrains-mono-latin.woff2
+  Copyright 2020 The JetBrains Mono Project Authors
+  https://github.com/JetBrains/JetBrainsMono
+
+IBM Plex Sans   — ibm-plex-sans-latin.woff2
+  Copyright 2017 IBM Corp.
+  https://github.com/IBM/plex
+
+Both are licensed under the SIL Open Font License, Version 1.1, reproduced in
+OFL.txt in this directory. Both files are the latin subset in variable-weight
+form, which is why one file per family covers every weight the dashboard uses.

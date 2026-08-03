@@ -31,6 +31,7 @@ import (
 	syncengine "github.com/shellcrumbs/shcr/internal/sync"
 	"github.com/shellcrumbs/shcr/internal/theme"
 	"github.com/shellcrumbs/shcr/internal/tui"
+	"github.com/shellcrumbs/shcr/internal/web"
 )
 
 // commandEnvVar carries command text from the shell hook to `shcr event`
@@ -58,6 +59,8 @@ func main() {
 		err = cmdInit(os.Args[2:])
 	case "tui":
 		err = cmdTUI(os.Args[2:])
+	case "web":
+		err = cmdWeb(os.Args[2:])
 	case "list", "ls":
 		err = cmdList(os.Args[2:])
 	case "stats":
@@ -92,6 +95,7 @@ usage: shcr <command> [flags]
   init <bash|zsh|fish>   print the shell integration snippet
   daemon                 run the capture daemon
   tui                    the Ctrl+R picker; prints the chosen command
+  web                    serve the local dashboard on 127.0.0.1
   list                   show recorded commands
   stats                  summarise what has been recorded
   key init|show|import   manage the end-to-end encryption key
@@ -656,7 +660,76 @@ func cmdTUI(args []string) error {
 
 // ---------------------------------------------------------------- service
 
+// needsNetwork reports whether the configured sync backend talks to the
+// network, which decides whether the unit may open internet sockets at all.
+func needsNetwork(backend string) bool {
+	return backend != "" && backend != "file"
+}
+
 // ---------------------------------------------------------------- web
+
+func cmdWeb(args []string) error {
+	fs := flag.NewFlagSet("web", flag.ExitOnError)
+	port := fs.Int("port", 0, "port to bind (0 picks a free one)")
+	open := fs.Bool("open", false,
+		"open the dashboard in a browser (passes the token to the browser launcher, "+
+			"where it is visible in the process list — avoid on a shared machine)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	deviceID, err := paths.DeviceID()
+	if err != nil {
+		return err
+	}
+	host, _ := os.Hostname()
+	logger := log.New(os.Stderr, "shcr: ", log.LstdFlags)
+
+	srv, err := web.New(st, deviceID, host, logger)
+	if err != nil {
+		return err
+	}
+
+	// The engine is built per request rather than once at startup. The
+	// dashboard can turn sync on and off, and an engine bound here would go on
+	// answering for whatever the configuration said when the page was first
+	// served — so switching sync on and pressing Sync did nothing at all.
+	srv.Sync = func(ctx context.Context) (int, int, error) {
+		cfg, err := config.Load()
+		if err != nil {
+			return 0, 0, err
+		}
+		if !cfg.Sync.Enabled {
+			return 0, 0, fmt.Errorf("sync is turned off")
+		}
+		engine, err := syncEngineWith(st)
+		if err != nil {
+			return 0, 0, err
+		}
+		return engine.SyncOnce(ctx)
+	}
+
+	ln, err := srv.Listen(*port)
+	if err != nil {
+		return err
+	}
+	url := srv.URL(ln)
+	fmt.Println(url)
+	fmt.Fprintln(os.Stderr, "The token in that URL is required; it changes every time the server starts.")
+	if *open {
+		web.OpenBrowser(url)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return srv.Serve(ctx, ln)
+}
 
 // ---------------------------------------------------------------- list
 

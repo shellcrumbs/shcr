@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shellcrumbs — command dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235FD4C0'/%3E%3Ccircle cx='11' cy='16' r='3' fill='%2308110F'/%3E%3Ccircle cx='21' cy='16' r='3' fill='%2308110F'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">◦◦</div>
+      <div class="brand-name">shellcrumbs</div>
+    </div>
+
+    <nav>
+      <button class="nav-item active" id="navDashboard" type="button">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        Dashboard
+      </button>
+      <button class="nav-item" id="navSettings" type="button">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
+        Settings
+      </button>
+    </nav>
+
+    <div class="sidebar-footer" id="sidebarDevices"></div>
+  </aside>
+
+  <main>
+    <!-- ---------------------------------------------------- Dashboard -->
+    <section class="view active" id="view-dashboard">
+      <div class="page-head">
+        <div>
+          <h1>Dashboard</h1>
+          <p>All commands, all machines, one place</p>
+        </div>
+        <div class="sync-status"><span class="pulse-dot" id="liveDot"></span> <span id="liveText">connecting…</span></div>
+      </div>
+
+      <div class="rhythm">
+        <div class="rhythm-head">
+          <h2>Activity — last 24h</h2>
+          <span class="now" id="rhythmCount"></span>
+        </div>
+        <div class="bars" id="bars"></div>
+        <div class="bars-labels" id="barLabels"></div>
+      </div>
+
+      <div class="stats">
+        <div class="stat-card"><div class="stat-label">Commands today</div><div class="stat-value" id="statToday">—</div></div>
+        <div class="stat-card"><div class="stat-label">Running now</div><div class="stat-value c-accent" id="statRunning">—</div></div>
+        <div class="stat-card"><div class="stat-label">Failed today</div><div class="stat-value c-danger" id="statFailed">—</div></div>
+        <div class="stat-card"><div class="stat-label">Orphaned</div><div class="stat-value c-warning" id="statOrphaned">—</div></div>
+      </div>
+
+      <div class="filter-bar">
+        <label class="search-input">
+          <input id="search" type="search" placeholder="search commands" autocomplete="off" spellcheck="false" aria-label="Search commands">
+          <span class="caret" aria-hidden="true">▊</span>
+        </label>
+        <select class="chip" id="hostFilter" aria-label="Filter by host"><option value="">All hosts</option></select>
+        <select class="chip" id="statusFilter" aria-label="Filter by status">
+          <option value="">All status</option>
+          <option value="running">Running</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+          <option value="orphaned">Orphaned</option>
+        </select>
+      </div>
+
+      <div class="table-wrap">
+        <div class="row head">
+          <span>Command</span><span>Host / dir</span><span>Started</span><span>Duration</span><span>Status</span>
+        </div>
+        <div id="rows"></div>
+      </div>
+
+      <footer>
+        <span id="footCount"></span>
+        <span id="footDevices"></span>
+      </footer>
+    </section>
+
+    <!-- ---------------------------------------------------- Settings -->
+    <section class="view" id="view-settings">
+      <div class="page-head">
+        <div>
+          <h1>Settings</h1>
+          <p>Devices, encryption, and sync</p>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="sec-head">
+          <h3>Connected devices</h3>
+          <p>Each device holds its own copy of your recovery key locally.</p>
+        </div>
+        <div id="deviceList"></div>
+      </div>
+
+      <div class="settings-section">
+        <div class="sec-head">
+          <h3>Encryption &amp; recovery</h3>
+          <p>Your commands are encrypted on-device before they ever leave it.</p>
+        </div>
+        <div class="key-box">
+          <span id="keyMask">●●●●●●●● ●●●●●●●● ●●●●●●●● ●●●●●●●●</span>
+          <button class="key-reveal" id="keyReveal" type="button">Reveal</button>
+        </div>
+        <div class="key-hint" id="keyHint">
+          This phrase is the only way to add a new device or recover your history.
+          It is never sent anywhere — including to this page.
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="sec-head"><h3>Sync</h3></div>
+        <div id="syncRows"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<button class="scrim" id="scrim" type="button" aria-label="Close details" tabindex="-1"></button>
+
+<aside class="detail" id="detail" aria-hidden="true">
+  <div class="detail-head">
+    <button class="detail-close" id="closeBtn" type="button">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      Close
+    </button>
+    <div class="detail-cmd-row">
+      <div class="detail-cmd" id="detailCmd"></div>
+      <div class="detail-actions">
+        <button class="icon-btn" id="copyBtn" type="button" title="Copy command">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>
+        </button>
+        <button class="icon-btn danger" id="redactBtn" type="button" title="Redact from history — replaces the text on every machine">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V6"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="detail-badge-row" id="detailBadge"></div>
+  </div>
+
+  <div class="detail-section">
+    <h3>Details</h3>
+    <div class="meta-grid" id="detailMeta"></div>
+  </div>
+
+  <div class="detail-section" id="detailTimelineSection">
+    <h3>Same session</h3>
+    <div class="timeline" id="detailTimeline"></div>
+  </div>
+
+  <div class="detail-section">
+    <h3>Output</h3>
+    <div class="output-note">
+      <strong>Not captured.</strong> Command output isn't stored, to keep history
+      lightweight and to avoid retaining sensitive data by accident.
+    </div>
+  </div>
+</aside>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
