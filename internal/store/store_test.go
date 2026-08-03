@@ -362,16 +362,31 @@ func TestQueryPerformanceAtScale(t *testing.T) {
 		filter Filter
 		budget time.Duration
 	}{
-		{"unfiltered recent", Filter{Limit: 50}, 50 * time.Millisecond},
-		{"status", Filter{Status: StatusFailed, Limit: 50}, 50 * time.Millisecond},
-		{"host", Filter{Hostname: "host-a", Limit: 50}, 50 * time.Millisecond},
+		// These three are what actually hold the schema's index rule. Measured
+		// on 500k rows with the indexes dropped: unfiltered 177µs -> 423ms,
+		// host 173µs -> 454ms, status 179µs -> 45.8ms. The budgets are 10ms
+		// rather than 50ms because of that last one — at 50ms a missing
+		// idx_commands_status passed, so the case did not catch the regression
+		// it exists for. 10ms still leaves a fifty-fold margin over the
+		// indexed time.
+		{"unfiltered recent", Filter{Limit: 50}, 10 * time.Millisecond},
+		{"status", Filter{Status: StatusFailed, Limit: 50}, 10 * time.Millisecond},
+		{"host", Filter{Hostname: "host-a", Limit: 50}, 10 * time.Millisecond},
 		{"selective text", Filter{Text: "kubectl get pods 12345", Limit: 50}, 50 * time.Millisecond},
 		{"no match", Filter{Text: "terraform", Limit: 50}, 50 * time.Millisecond},
 		// A single very common token matches ~100k of the 500k rows, and the
 		// exact answer means walking every one of them. Interactive search
 		// avoids paying this by not querying until the user has typed enough to
 		// be selective; the budget here just pins the worst case.
-		{"broad single token", Filter{Text: "npm", Limit: 50}, 150 * time.Millisecond},
+		//
+		// A whole second, and deliberately loose. Unlike the cases above, this
+		// one is unaffected by the indexes — measured at 135ms with them and
+		// 135ms with all three dropped — because its cost is the FTS scan of
+		// ~100k matches, not the ordering. So it pins one thing only: that the
+		// pathological query stays bounded. Its runtime tracks how fast the
+		// machine is (200ms on a laptop, 320ms best-of-five on a CI runner),
+		// and a threshold tuned to one laptop only ever fails on someone else's.
+		{"broad single token", Filter{Text: "npm", Limit: 50}, time.Second},
 	}
 	// Best of several runs rather than one timed sample. A single sample
 	// measures the machine as much as the query: a shared runner descheduling
