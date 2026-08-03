@@ -8,7 +8,11 @@ go test ./...
 
 ## Requirements
 
-Go 1.25 or newer.
+Go 1.26.5 or newer — the version `go.mod` declares, and what CI builds with. An
+older toolchain will fetch it on demand unless you have set `GOTOOLCHAIN=local`.
+
+Tests also shell out to `bash`, `zsh`, `shellcheck` and `systemd-analyze` where
+they are present, and skip those checks where they are not.
 
 
 ## How it works

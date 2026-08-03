@@ -1,5 +1,7 @@
 # Shellcrumbs (`shcr`)
 
+[![CI](https://github.com/shellcrumbs/shcr/actions/workflows/ci.yml/badge.svg)](https://github.com/shellcrumbs/shcr/actions/workflows/ci.yml)
+
 Shell history that records **when a command started**, not only that it ran.
 
 Most other history tools write entries after a command finishes, which means

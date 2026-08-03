@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push makes the run in progress irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: build, vet, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # From go.mod, so the toolchain cannot drift away from what the module
+          # declares it needs.
+          go-version-file: go.mod
+
+      # Installed rather than assumed: the runner image carries both today, and
+      # a hook that silently stops being syntax-checked is worse than a slow job.
+      - name: Install zsh and shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh shellcheck
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: shellcheck
+        run: shellcheck -s bash internal/shell/bash.sh
+
+      # The hooks are emitted by the binary with a path substituted in, so the
+      # thing worth parsing is what `shcr init` actually prints, not the source
+      # template.
+      - name: Syntax-check the emitted hooks
+        run: |
+          go build -o /tmp/shcr ./cmd/shcr
+          /tmp/shcr init bash > /tmp/hook.bash
+          /tmp/shcr init zsh  > /tmp/hook.zsh
+          bash -n /tmp/hook.bash
+          zsh  -n /tmp/hook.zsh
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
+
+      # What a user actually installs: pure Go, no cgo, trimmed paths. This is
+      # the build that would break first if a cgo-only dependency crept in.
+      - name: Release build
+        run: |
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/shcr-release ./cmd/shcr
+          /tmp/shcr-release version
+
+  race:
+    name: race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Wall-clock assertions skip themselves under -race, so this run is about
+      # data races and nothing else.
+      - name: go test -race
+        run: go test -race ./...
