@@ -26,6 +26,7 @@ import (
 	"github.com/shellcrumbs/shcr/internal/shell"
 	"github.com/shellcrumbs/shcr/internal/store"
 	"github.com/shellcrumbs/shcr/internal/theme"
+	"github.com/shellcrumbs/shcr/internal/tui"
 )
 
 // commandEnvVar carries command text from the shell hook to `shcr event`
@@ -45,6 +46,8 @@ func main() {
 		err = cmdEvent(os.Args[2:])
 	case "init":
 		err = cmdInit(os.Args[2:])
+	case "tui":
+		err = cmdTUI(os.Args[2:])
 	case "list", "ls":
 		err = cmdList(os.Args[2:])
 	case "stats":
@@ -74,6 +77,7 @@ usage: shcr <command> [flags]
 
   init <bash|zsh|fish>   print the shell integration snippet
   daemon                 run the capture daemon
+  tui                    the Ctrl+R picker; prints the chosen command
   list                   show recorded commands
   stats                  summarise what has been recorded
   redact <id>            replace a recorded command with a tombstone
@@ -298,6 +302,31 @@ func cmdInit(args []string) error {
 }
 
 // ---------------------------------------------------------------- tui
+
+func cmdTUI(args []string) error {
+	fs := flag.NewFlagSet("tui", flag.ExitOnError)
+	query := fs.String("query", "", "text already typed at the prompt")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	chosen, err := tui.Run(st, *query)
+	if err != nil {
+		return err
+	}
+	// stdout carries the selection and nothing else — the shell captures it and
+	// puts it in the prompt. Printing it is the whole contract; running it is
+	// deliberately not our decision to make.
+	if chosen != "" {
+		fmt.Print(chosen)
+	}
+	return nil
+}
 
 // ---------------------------------------------------------------- service
 
