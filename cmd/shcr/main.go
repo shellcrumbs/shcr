@@ -26,6 +26,7 @@ import (
 	"github.com/shellcrumbs/shcr/internal/ipc"
 	"github.com/shellcrumbs/shcr/internal/paths"
 	"github.com/shellcrumbs/shcr/internal/redact"
+	"github.com/shellcrumbs/shcr/internal/service"
 	"github.com/shellcrumbs/shcr/internal/shell"
 	"github.com/shellcrumbs/shcr/internal/store"
 	syncengine "github.com/shellcrumbs/shcr/internal/sync"
@@ -61,6 +62,8 @@ func main() {
 		err = cmdTUI(os.Args[2:])
 	case "web":
 		err = cmdWeb(os.Args[2:])
+	case "service":
+		err = cmdService(os.Args[2:])
 	case "list", "ls":
 		err = cmdList(os.Args[2:])
 	case "stats":
@@ -96,6 +99,7 @@ usage: shcr <command> [flags]
   daemon                 run the capture daemon
   tui                    the Ctrl+R picker; prints the chosen command
   web                    serve the local dashboard on 127.0.0.1
+  service install|...    run the daemon under systemd
   list                   show recorded commands
   stats                  summarise what has been recorded
   key init|show|import   manage the end-to-end encryption key
@@ -659,6 +663,102 @@ func cmdTUI(args []string) error {
 }
 
 // ---------------------------------------------------------------- service
+
+func cmdService(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("service: want 'install', 'uninstall', 'status' or 'units'")
+	}
+	th := theme.New(os.Stdout)
+
+	switch args[0] {
+	case "units":
+		// Print without installing, so the units can be inspected or managed by
+		// something other than this command.
+		binary, err := service.BinaryPath()
+		if err != nil {
+			return err
+		}
+		cfg, _ := config.Load()
+		socket, svc, err := service.Render(binary, needsNetwork(cfg.Sync.Backend))
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\n%s\n%s\n%s",
+			th.Label.Render("# "+service.SocketUnit), socket,
+			th.Label.Render("# "+service.ServiceUnit), svc)
+		return nil
+
+	case "install":
+		fs := flag.NewFlagSet("service install", flag.ExitOnError)
+		start := fs.Bool("start", true, "enable and start the units immediately")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if err := service.Available(); err != nil {
+			return err
+		}
+		binary, err := service.BinaryPath()
+		if err != nil {
+			return err
+		}
+		cfg, _ := config.Load()
+		written, err := service.Install(binary, needsNetwork(cfg.Sync.Backend))
+		if err != nil {
+			return err
+		}
+		for _, p := range written {
+			fmt.Printf("%s %s\n", th.Label.Render("wrote"), p)
+		}
+		if err := service.Systemctl("daemon-reload"); err != nil {
+			return err
+		}
+		if *start {
+			// Enabling the socket rather than the service is the point: systemd
+			// creates the socket at boot and starts the daemon on first use.
+			if err := service.Systemctl("enable", "--now", service.SocketUnit); err != nil {
+				return err
+			}
+			if err := service.Systemctl("enable", "--now", service.ServiceUnit); err != nil {
+				return err
+			}
+			fmt.Println(th.Label.Render("started") + " shcr.socket and shcr.service")
+		}
+		if service.InTree(binary) {
+			fmt.Fprintf(os.Stderr, "\nnote: the unit points at %s, which looks like a build directory.\n"+
+				"      Rebuilding there will replace the binary underneath the running service.\n"+
+				"      Consider copying it to ~/.local/bin and re-running this.\n", binary)
+		}
+		if hint := service.LingerHint(os.Getenv("USER")); hint != "" {
+			fmt.Fprintf(os.Stderr, "\n%s\n", hint)
+		}
+		return nil
+
+	case "uninstall":
+		removed, err := service.Uninstall()
+		if err != nil {
+			return err
+		}
+		if len(removed) == 0 {
+			fmt.Println("no units were installed")
+		}
+		for _, p := range removed {
+			fmt.Printf("%s %s\n", th.Label.Render("removed"), p)
+		}
+		fmt.Println()
+		fmt.Println(th.Muted.Render("Your history was left alone. To remove it as well:"))
+		for _, p := range service.DataPaths() {
+			fmt.Println(th.Muted.Render("    rm -rf " + p))
+		}
+		return nil
+
+	case "status":
+		if err := service.Available(); err != nil {
+			return err
+		}
+		return service.Systemctl("status", "--no-pager", service.SocketUnit, service.ServiceUnit)
+	}
+	return fmt.Errorf("service: unknown subcommand %q", args[0])
+}
 
 // needsNetwork reports whether the configured sync backend talks to the
 // network, which decides whether the unit may open internet sockets at all.
