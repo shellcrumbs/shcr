@@ -5,6 +5,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/csv"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +28,7 @@ import (
 	"github.com/shellcrumbs/shcr/internal/daemon"
 	"github.com/shellcrumbs/shcr/internal/event"
 	"github.com/shellcrumbs/shcr/internal/gitinfo"
+	"github.com/shellcrumbs/shcr/internal/histfile"
 	"github.com/shellcrumbs/shcr/internal/ipc"
 	"github.com/shellcrumbs/shcr/internal/paths"
 	"github.com/shellcrumbs/shcr/internal/redact"
@@ -74,6 +80,10 @@ func main() {
 		err = cmdSync(os.Args[2:])
 	case "redact":
 		err = cmdRedact(os.Args[2:])
+	case "import":
+		err = cmdImport(os.Args[2:])
+	case "export":
+		err = cmdExport(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(versionString())
 	case "help", "--help", "-h":
@@ -105,6 +115,8 @@ usage: shcr <command> [flags]
   key init|show|import   manage the end-to-end encryption key
   sync now|status|enable cross-machine sync
   redact <id>            replace a recorded command with a tombstone
+  import [file...]       bring in an existing shell history file
+  export                 write your history out, to stdout or a file
   event start|end        record an event (called by the shell hooks)
   nudge <reason>         tell the daemon a sync is worthwhile (called by the hooks)
   version
@@ -578,7 +590,295 @@ func cmdSync(args []string) error {
 
 // ---------------------------------------------------------------- import
 
+func cmdImport(args []string) error {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	dryRun := fs.Bool("dry-run", false, "report what would be imported without writing anything")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	th := theme.New(os.Stdout)
+
+	files := fs.Args()
+	if len(files) == 0 {
+		files = histfile.Discover()
+		if len(files) == 0 {
+			return fmt.Errorf("found no history files; pass one explicitly")
+		}
+	}
+
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	deviceID, err := paths.DeviceID()
+	if err != nil {
+		return err
+	}
+	host, _ := os.Hostname()
+	red := redactor()
+
+	var totalNew, totalSeen, totalRedacted, totalSkipped int
+	for _, p := range files {
+		src, err := histfile.Parse(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "shcr: %s: %v\n", p, err)
+			continue
+		}
+
+		var added, existing, redacted, skipped int
+		for _, e := range src.Entries {
+			text, action, _ := red.Apply(e.Command)
+			if action == redact.ActionSkip {
+				skipped++
+				continue
+			}
+			if action == redact.ActionRedact {
+				redacted++
+			}
+			ev := importEvent(deviceID, host, string(src.Kind), src.Path, text, e)
+			if *dryRun {
+				// An entry's identity is derived from its content, so whether it is
+				// already here is knowable without writing anything. Counting every
+				// entry as new made the one number this flag exists to produce wrong
+				// for the common case of re-importing a file.
+				c, err := st.CommandByID(ev.CommandID)
+				if err != nil {
+					return fmt.Errorf("%s: %w", p, err)
+				}
+				if c == nil {
+					added++
+				} else {
+					existing++
+				}
+				continue
+			}
+			inserted, err := st.AppendEvent(ev)
+			if err != nil {
+				return fmt.Errorf("%s: %w", p, err)
+			}
+			if inserted {
+				added++
+			} else {
+				existing++
+			}
+		}
+
+		fmt.Printf("%s %s\n", th.Label.Render(fmt.Sprintf("%-6s", string(src.Kind))), p)
+		detail := fmt.Sprintf("%d new", added)
+		if existing > 0 {
+			detail += fmt.Sprintf(", %d already present", existing)
+		}
+		if redacted > 0 {
+			detail += fmt.Sprintf(", %d with secrets redacted", redacted)
+		}
+		if skipped > 0 {
+			detail += fmt.Sprintf(", %d skipped entirely", skipped)
+		}
+		fmt.Printf("       %s\n", th.Muted.Render(detail))
+
+		totalNew += added
+		totalSeen += existing
+		totalRedacted += redacted
+		totalSkipped += skipped
+	}
+
+	fmt.Println()
+	if *dryRun {
+		msg := fmt.Sprintf("dry run: %d command(s) would be imported", totalNew)
+		if totalSeen > 0 {
+			msg += fmt.Sprintf("; %d already here", totalSeen)
+		}
+		fmt.Println(th.Muted.Render(msg))
+		return nil
+	}
+	fmt.Printf("imported %d command(s)", totalNew)
+	if totalSeen > 0 {
+		fmt.Printf("; %d were already here", totalSeen)
+	}
+	fmt.Println()
+	fmt.Println(th.Muted.Render(
+		"Imported commands carry no exit code, and a time only where the shell recorded one."))
+	return nil
+}
+
+// importEvent builds an event whose identity is derived from its content, so
+// importing the same file twice adds nothing the second time. A history file is
+// re-read, appended to and trimmed constantly; anything keyed on position would
+// duplicate every entry the first time the file rolled over.
+func importEvent(deviceID, host, shell, source, text string, e histfile.Entry) event.Event {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		"shcr-import-v1", shell, strconv.FormatInt(e.StartTime, 10), text,
+	}, "\x00")))
+	id := "import-" + hex.EncodeToString(sum[:12])
+
+	payload, _ := json.Marshal(event.ImportPayload{
+		Command:         text,
+		Hostname:        host,
+		Shell:           shell,
+		StartTime:       e.StartTime,
+		ApproximateTime: e.Approximate,
+		DurationMS:      e.DurationMS,
+		Source:          filepath.Base(source),
+	})
+	return event.Event{
+		EventID:   id,
+		CommandID: id,
+		DeviceID:  deviceID,
+		Type:      event.TypeImport,
+		Payload:   payload,
+		CreatedAt: e.StartTime,
+	}
+}
+
 // ---------------------------------------------------------------- export
+
+func cmdExport(args []string) error {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	format := fs.String("format", "jsonl", "jsonl, json or csv")
+	events := fs.Bool("events", false, "export the raw event log instead of commands (lossless)")
+	out := fs.String("o", "", "write to this file instead of stdout (created 0600)")
+	query := fs.String("q", "", "full-text search over the command")
+	status := fs.String("status", "", "running|completed|failed|orphaned")
+	host := fs.String("host", "", "filter by hostname")
+	session := fs.String("session", "", "filter by session id")
+	cwd := fs.String("cwd", "", "filter by working directory")
+	since := fs.Duration("since", 0, "only commands newer than this (e.g. 720h)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	w := io.Writer(os.Stdout)
+	if *out != "" {
+		// This file is the whole history in plain text, so it is created with the
+		// same permissions as the database it came from.
+		f, err := os.OpenFile(*out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		w = f
+	}
+	buf := bufio.NewWriterSize(w, 128*1024)
+	defer buf.Flush()
+
+	f := store.Filter{
+		Text: *query, Status: *status, Hostname: *host,
+		SessionID: *session, Cwd: *cwd,
+	}
+	if *since > 0 {
+		f.Since = time.Now().Add(-*since).UnixMilli()
+	}
+
+	var n int
+	switch strings.ToLower(*format) {
+	case "jsonl":
+		enc := json.NewEncoder(buf)
+		if *events {
+			err = st.EachEvent(func(ev event.Event) error { n++; return enc.Encode(ev) })
+		} else {
+			err = st.EachCommand(f, func(c store.Command) error { n++; return enc.Encode(c) })
+		}
+	case "json":
+		// One array, streamed element by element rather than assembled in memory.
+		if _, err := buf.WriteString("[\n"); err != nil {
+			return err
+		}
+		enc := json.NewEncoder(buf)
+		emit := func(v any) error {
+			if n > 0 {
+				if _, err := buf.WriteString(","); err != nil {
+					return err
+				}
+			}
+			n++
+			return enc.Encode(v)
+		}
+		if *events {
+			err = st.EachEvent(func(ev event.Event) error { return emit(ev) })
+		} else {
+			err = st.EachCommand(f, func(c store.Command) error { return emit(c) })
+		}
+		if err == nil {
+			_, err = buf.WriteString("]\n")
+		}
+	case "csv":
+		if *events {
+			return fmt.Errorf("the event log has a nested payload; use --format jsonl for --events")
+		}
+		cw := csv.NewWriter(buf)
+		defer cw.Flush()
+		if err := cw.Write([]string{
+			"id", "started", "command", "host", "cwd", "branch", "shell",
+			"status", "exit_code", "duration_ms", "session", "imported",
+		}); err != nil {
+			return err
+		}
+		err = st.EachCommand(f, func(c store.Command) error {
+			n++
+			return cw.Write([]string{
+				c.ID,
+				time.UnixMilli(c.StartTime).Format(time.RFC3339),
+				c.Command, c.Hostname, c.Cwd, derefString(c.GitBranch), c.Shell,
+				c.Status, derefInt(c.ExitCode), derefInt64(c.DurationMS),
+				c.SessionID, strconv.FormatBool(c.Imported),
+			})
+		})
+	default:
+		return fmt.Errorf("unknown format %q (want jsonl, json or csv)", *format)
+	}
+	if err != nil {
+		return err
+	}
+	if err := buf.Flush(); err != nil {
+		return err
+	}
+
+	// The count goes to stderr so stdout stays a clean stream to pipe.
+	kind := "command"
+	if *events {
+		kind = "event"
+	}
+	fmt.Fprintf(os.Stderr, "exported %d %s(s)", n, kind)
+	if *out != "" {
+		fmt.Fprintf(os.Stderr, " to %s", *out)
+	}
+	fmt.Fprintln(os.Stderr)
+	if !*events {
+		fmt.Fprintln(os.Stderr,
+			"note: this is the derived view. `--events` exports the log it is derived from,")
+		fmt.Fprintln(os.Stderr,
+			"      which is lossless and the only form that can rebuild this database.")
+	}
+	return nil
+}
+
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func derefInt(p *int) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.Itoa(*p)
+}
+
+func derefInt64(p *int64) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.FormatInt(*p, 10)
+}
 
 // ---------------------------------------------------------------- redact
 
