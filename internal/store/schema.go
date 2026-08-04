@@ -66,4 +66,44 @@ CREATE TABLE IF NOT EXISTS sync_cursors (
 ALTER TABLE commands ADD COLUMN imported INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_commands_imported ON commands(imported, start_time DESC);
 `,
+	// 4: per-command statistics for ranking.
+	//
+	// Ranking needs one row per distinct command, not per execution, and it
+	// needs it fast enough to run between keystrokes. Deriving it on demand is
+	// not an option: GROUP BY command over 500k executions measures 815ms, and
+	// even a bare DISTINCT is 644ms, because the cost is the scan rather than
+	// the result. So it is materialised here and refreshed from the executions
+	// that have arrived since the watermark.
+	//
+	// It is a cache. Nothing here cannot be rebuilt from the commands table,
+	// and RefreshCommandStats(0) does exactly that.
+	`
+CREATE TABLE IF NOT EXISTS command_stats (
+    command        TEXT PRIMARY KEY,
+    runs           INTEGER NOT NULL DEFAULT 0,
+    last_time      INTEGER NOT NULL DEFAULT 0,
+    -- The decayed use count, and when it was last brought up to date.
+    weight         REAL    NOT NULL DEFAULT 0,
+    weight_at      INTEGER NOT NULL DEFAULT 0,
+    -- Exit codes bucketed by what they mean; see rank.ClassifyExit, which is
+    -- the authority for these ranges.
+    succeeded      INTEGER NOT NULL DEFAULT 0,
+    failed         INTEGER NOT NULL DEFAULT 0,
+    never_ran      INTEGER NOT NULL DEFAULT 0,
+    interrupted    INTEGER NOT NULL DEFAULT 0,
+    unfinished     INTEGER NOT NULL DEFAULT 0,
+    imported_runs  INTEGER NOT NULL DEFAULT 0,
+    last_failed_at INTEGER NOT NULL DEFAULT 0
+);
+
+-- Refreshing looks up executions by their command text, which without this is
+-- the same full scan the table exists to avoid.
+CREATE INDEX IF NOT EXISTS idx_commands_command ON commands(command);
+
+CREATE TABLE IF NOT EXISTS stats_meta (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    watermark INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO stats_meta (id, watermark) VALUES (1, 0);
+`,
 }
