@@ -86,6 +86,24 @@ func TestFilterIsAnnouncedInTheBorderOnlyWhenSet(t *testing.T) {
 	}
 }
 
+// ^F cycles rather than toggles, so the hint has to say where the next press
+// lands. "filter" told you a filter existed and nothing else.
+func TestFilterHintNamesTheNextState(t *testing.T) {
+	m := testModel(100, 20)
+	want := []string{"running", "failed", "orphaned", "all"}
+	for i, w := range want {
+		m.statusIdx = i
+		hints := m.renderHints()
+		if !strings.Contains(hints, w) {
+			t.Errorf("on %q the hint should offer %q: %s", statusCycle[i], w, hints)
+		}
+		// The active filter belongs in the border, not doubled in the hint.
+		if cur := statusCycle[i]; cur != "" && strings.Contains(hints, cur) && cur != w {
+			t.Errorf("hint names the current filter %q as well as the next: %s", cur, hints)
+		}
+	}
+}
+
 func TestEmptyStatesAreDistinguished(t *testing.T) {
 	m := testModel(100, 20)
 	if !strings.Contains(strings.Join(m.renderList(50), ""), "nothing recorded yet") {

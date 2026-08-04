@@ -124,12 +124,27 @@ func (m *Model) renderBottom(leftW, rightW int) string {
 	return m.theme.Frame.Render("╰" + strings.Repeat("─", leftW) + "┴" + strings.Repeat("─", rightW) + "╯")
 }
 
+// nextFilterLabel names what ^F will do, not what it did. The filter is a
+// cycle, and a key labelled "filter" says only that one exists — from an
+// unfiltered list you cannot tell what pressing it gives you, and from a
+// filtered one you cannot tell whether the next press moves on or clears.
+//
+// Which filter is active is already in the border, with the same dot the rows
+// use, so naming the next one here adds to that rather than repeating it.
+func nextFilterLabel(idx int) string {
+	next := statusCycle[(idx+1)%len(statusCycle)]
+	if next == "" {
+		return "all"
+	}
+	return next
+}
+
 func (m *Model) renderHints() string {
 	pairs := [][2]string{
 		{"↑↓", "navigate"},
 		{"⏎", "insert"},
 		{"^Y", "copy"},
-		{"^F", "filter"},
+		{"^F", nextFilterLabel(m.statusIdx)},
 		{"esc", "cancel"},
 	}
 	if m.copied {
