@@ -103,6 +103,13 @@ func Render(binary string, networkBackend bool) (socket, service string, err err
 	// AF_UNIX covers the hooks and the file sync backend. A cloud backend needs
 	// the internet families, and asking for them only when they are used keeps
 	// the default install unable to open a network socket at all.
+	// A unit file is line-oriented, and the templates interpolate this path
+	// directly, so a newline in it would start a new directive of the
+	// attacker's choosing. There is nothing to escape it with: refuse instead.
+	if strings.ContainsAny(binary, "\n\r") {
+		return "", "", fmt.Errorf("refusing to write a unit for a path containing a newline: %q", binary)
+	}
+
 	families := "AF_UNIX"
 	if networkBackend {
 		families += " AF_INET AF_INET6"

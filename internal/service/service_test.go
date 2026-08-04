@@ -179,6 +179,22 @@ func TestInstallReportsFilesInAStableOrder(t *testing.T) {
 	}
 }
 
+// Unit files are line-oriented and the path is interpolated straight in, so a
+// newline in it starts a directive of somebody else's choosing.
+func TestUnitRefusesAPathThatCouldInjectDirectives(t *testing.T) {
+	for _, bad := range []string{
+		"/tmp/x\nExecStartPre=/bin/sh -c id\n/shcr",
+		"/tmp/x\r\n[Service]\n/shcr",
+	} {
+		if _, _, err := Render(bad, false); err == nil {
+			t.Errorf("Render accepted a path containing a newline: %q", bad)
+		}
+	}
+	if _, _, err := Render("/usr/local/bin/shcr", false); err != nil {
+		t.Errorf("an ordinary path was rejected: %v", err)
+	}
+}
+
 func TestInTreeSpotsABuildDirectory(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	if InTree(filepath.Join(home, ".local", "bin", "shcr")) {

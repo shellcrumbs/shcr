@@ -23,6 +23,13 @@ var Supported = []string{"bash", "zsh", "fish"}
 
 // InitScript returns the integration snippet for a shell, with the absolute
 // path of the running binary baked in so the hooks do not depend on $PATH.
+// shellQuote escapes a value for the single quotes the templates already put
+// around it. The path went in raw, so one containing a quote closed the string
+// and left the rest of it as code — and `shcr init` output is eval'd from the
+// user's shell rc, on every new shell. The replacement closes the string,
+// escapes a literal quote, then reopens: bash, zsh and fish all read it alike.
+func shellQuote(s string) string { return strings.ReplaceAll(s, "'", `'\''`) }
+
 func InitScript(name string) (string, error) {
 	var script string
 	switch name {
@@ -35,7 +42,7 @@ func InitScript(name string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported shell %q (want one of %s)", name, strings.Join(Supported, ", "))
 	}
-	return strings.ReplaceAll(script, "@SHCR_BIN@", binaryPath()), nil
+	return strings.ReplaceAll(script, "@SHCR_BIN@", shellQuote(binaryPath())), nil
 }
 
 func binaryPath() string {

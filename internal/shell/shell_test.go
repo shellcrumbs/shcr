@@ -105,6 +105,35 @@ func TestFishScriptAvoidsTheTwoSourcedFileTraps(t *testing.T) {
 	}
 }
 
+// The templates wrap the binary path in single quotes and the path went in
+// unescaped, so a path containing a quote closed the string and the rest of it
+// became code — executed by the eval in the user's shell rc, on every shell.
+func TestBinaryPathCannotBreakOutOfTheHookQuoting(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not installed")
+	}
+	for _, path := range []string{
+		`/home/o'brien/bin/shcr`,
+		`/tmp/x';echo INJECTED;'y/shcr`,
+		`/tmp/a"b/shcr`,
+		`/tmp/$(echo no)/shcr`,
+		"/tmp/back`tick`/shcr",
+		`/usr/local/bin/shcr`,
+	} {
+		// What the templates do, with the path escaped the way InitScript does.
+		script := "__SHCR_BIN='" + shellQuote(path) + "'\nprintf %s \"$__SHCR_BIN\""
+		out, err := exec.Command(bash, "-c", script).CombinedOutput()
+		if err != nil {
+			t.Errorf("path %q produced a script bash could not run: %v (%s)", path, err, out)
+			continue
+		}
+		if string(out) != path {
+			t.Errorf("path %q came back as %q", path, out)
+		}
+	}
+}
+
 func TestInitScriptsAreSelfGuardedAndNameTheBinary(t *testing.T) {
 	for _, sh := range Supported {
 		script, err := InitScript(sh)
