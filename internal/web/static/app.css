@@ -23,6 +23,11 @@
 }
 
 :root {
+  /* Without this the browser renders its own parts — the select dropdowns, the
+     search field's affordances, scrollbars — in light mode against a near-black
+     page. */
+  color-scheme: dark;
+
   --bg: #0B0E13;
   --bg-raised: #10141C;
   --surface: #151A24;
@@ -40,6 +45,13 @@
   --danger-dim: #4A2620;
   --warning: #E0A64B;
   --warning-dim: #453623;
+  /* Named rather than inlined, because these four are the values that assume a
+     dark page: a white-on-black texture and near-black shadows. */
+  --glow: rgba(95, 212, 192, 0.06);
+  --texture: rgba(255, 255, 255, 0.006);
+  --scrim: rgba(5, 7, 10, 0.55);
+  --drawer-shadow: rgba(0, 0, 0, 0.35);
+
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --radius: 10px;
@@ -47,11 +59,47 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* The same twenty-one names, resolved for a light page. Every colour in this
+   stylesheet goes through a variable, so this block is the whole theme.
+   Contrast against --bg and --surface was checked rather than eyeballed: body
+   text clears 15:1, the status colours clear 4.5:1, the faintest text clears
+   3:1. */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #F4F6F8;
+    --bg-raised: #FAFBFC;
+    --surface: #FFFFFF;
+    --surface-hover: #EEF2F6;
+    --border: #D6DCE3;
+    --border-soft: #E7EBF0;
+    --text: #1B2028;
+    --text-dim: #576070;
+    --text-faint: #7C8697;
+    --accent: #0F7A6B;
+    --accent-dim: #CFEDE7;
+    --success: #1A7F4B;
+    --success-dim: #DAF0E3;
+    --danger: #B3271A;
+    --danger-dim: #FADFDA;
+    --warning: #8A6100;
+    --warning-dim: #F7EAD2;
+
+    /* Elevation reads as a shadow on a light page, not as a lighter surface,
+       and the dark theme's white scanline texture would be invisible. */
+    --glow: rgba(15, 122, 107, 0.05);
+    --texture: rgba(0, 0, 0, 0.015);
+    --scrim: rgba(20, 28, 40, 0.30);
+    --drawer-shadow: rgba(15, 25, 40, 0.12);
+  }
+}
+
 body {
   background: var(--bg);
   background-image:
-    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(95,212,192,0.06), transparent),
-    repeating-linear-gradient(180deg, rgba(255,255,255,0.006) 0px, transparent 1px, transparent 2px);
+    radial-gradient(ellipse 900px 500px at 15% -10%, var(--glow), transparent),
+    repeating-linear-gradient(180deg, var(--texture) 0px, transparent 1px, transparent 2px);
   color: var(--text);
   font-family: var(--sans);
   font-size: 14px;
@@ -224,7 +272,7 @@ footer { margin-top: 18px; display: flex; justify-content: space-between; font-s
 
 /* ---- Detail slide-over ---- */
 .scrim {
-  position: fixed; inset: 0; background: rgba(5,7,10,0.55); backdrop-filter: blur(2px);
+  position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(2px);
   opacity: 0; pointer-events: none; transition: opacity 0.18s; z-index: 20;
   border: none;
 }
@@ -235,7 +283,7 @@ footer { margin-top: 18px; display: flex; justify-content: space-between; font-s
   background: var(--bg-raised); border-left: 1px solid var(--border);
   transform: translateX(100%); transition: transform 0.22s cubic-bezier(0.2,0.7,0.3,1);
   z-index: 21; overflow-y: auto;
-  box-shadow: -24px 0 48px rgba(0,0,0,0.35);
+  box-shadow: -24px 0 48px var(--drawer-shadow);
 }
 .detail.open { transform: translateX(0); }
 

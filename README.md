@@ -185,6 +185,9 @@ Activity over the last 24 hours, stat cards, a filterable table, a detail
 slide-over showing what ran either side of a command in the same shell, and a
 settings page — updating live over a server-sent event stream.
 
+It follows your system's light or dark setting, with no toggle to remember and
+nothing stored about which one you picked.
+
 It binds `127.0.0.1` (so only accessible on the local machine), and every
 `/api` route requires the token in that URL, regenerated on each start.
 Localhost is not a boundary on a shared machine: any other account can reach a
