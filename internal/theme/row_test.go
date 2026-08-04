@@ -258,6 +258,42 @@ func TestHighlightIsCorrectWhenFoldingChangesLength(t *testing.T) {
 	}
 }
 
+// A recorded command can contain any byte, and with sync it was recorded on
+// someone else's machine. Escape sequences reaching the terminal let it clear
+// the screen, and a carriage return makes the row show something other than
+// what is stored — in the picker, that is the text about to land in the prompt.
+func TestControlSequencesNeverReachTheTerminal(t *testing.T) {
+	th := plainTheme(t)
+	for _, tc := range []struct{ name, command, mustNotContain string }{
+		{"clear screen", "echo \x1b[2Jgone", "\x1b"},
+		{"carriage return rewrite", "echo before\rAFTER", "\r"},
+		{"bell", "echo \a", "\a"},
+		{"eight-bit CSI", "echo \u009b2J", "\u009b"},
+		{"backspace", "echo a\bb", "\b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := th.Row(cmd(func(c *store.Command) { c.Command = tc.command }), RowOpts{Width: 80})
+			if strings.Contains(row, tc.mustNotContain) {
+				t.Errorf("row still carries %q: %q", tc.mustNotContain, row)
+			}
+			if Width(row) != 80 {
+				t.Errorf("row is %d columns, want 80: %q", Width(row), row)
+			}
+		})
+	}
+
+	// Ordinary text is untouched.
+	if got := Safe("git commit -m 'héllo wörld → ✓'"); got != "git commit -m 'héllo wörld → ✓'" {
+		t.Errorf("Safe altered ordinary text: %q", got)
+	}
+	if got := SafeMultiline("a\nb"); got != "a\nb" {
+		t.Errorf("SafeMultiline dropped a newline: %q", got)
+	}
+	if got := Safe("a\nb"); strings.Contains(got, "\n") {
+		t.Errorf("Safe kept a newline: %q", got)
+	}
+}
+
 func TestStatusVocabularyIsShared(t *testing.T) {
 	for _, s := range []string{
 		store.StatusCompleted, store.StatusRunning, store.StatusFailed, store.StatusOrphaned,

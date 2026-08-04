@@ -91,13 +91,44 @@ func RelativeTime(ms int64) string {
 	return time.UnixMilli(ms).Format("2 Jan 2006")
 }
 
+// Safe makes recorded text printable before it reaches a terminal.
+//
+// A command can contain any byte its author typed, and with sync it was typed
+// on another machine. Passed through as-is, an escape sequence in a command
+// does what escape sequences do: `\x1b[2J` clears the screen when `shcr list`
+// prints it, and a carriage return rewrites the row so what is displayed is not
+// what is stored. That last one matters most in the picker, whose safety rests
+// on the user seeing the command they are about to put in their prompt.
+//
+// Only display goes through here. The stored text and anything `shcr export`
+// writes stay byte for byte as recorded.
+func Safe(s string) string { return sanitize(s, false) }
+
+// SafeMultiline is Safe but keeps newlines, for output that prints a command
+// across several lines.
+func SafeMultiline(s string) string { return sanitize(s, true) }
+
+func sanitize(s string, keepNewlines bool) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' && keepNewlines:
+			return r
+		// C0, DEL, and C1 — 0x9b is an eight-bit CSI, so stripping the escape
+		// character alone is not enough.
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+			return '\uFFFD'
+		}
+		return r
+	}, s)
+}
+
 // FirstLine collapses a multi-line command for single-row display. The stored
 // text keeps its newlines; this only affects what a list shows.
 func FirstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return strings.TrimRight(s[:i], " \t") + " ↵"
+		return Safe(strings.TrimRight(s[:i], " \t")) + " ↵"
 	}
-	return s
+	return Safe(s)
 }
 
 // Truncate cuts plain text to a display width, marking the cut.
@@ -107,6 +138,7 @@ func FirstLine(s string) string {
 // picker's border off the screen. Graphemes rather than runes, so a combining
 // mark or a ZWJ emoji sequence is never split down the middle.
 func Truncate(s string, w int) string {
+	s = Safe(s)
 	if w <= 0 {
 		return ""
 	}
@@ -134,6 +166,9 @@ func Truncate(s string, w int) string {
 // than by rune. maxLines caps the number of lines returned; anything past that
 // is dropped, with no marker to say so.
 func Wrap(s string, w, maxLines int) []string {
+	// Safe, not SafeMultiline: this wraps to a fixed width inside a bordered
+	// pane, and a literal newline in the middle would walk straight out of it.
+	s = Safe(s)
 	if w <= 0 {
 		return nil
 	}

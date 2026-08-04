@@ -1233,7 +1233,7 @@ func cmdList(args []string) error {
 		// --full only has to supply what was cut off.
 		if *full && strings.Contains(c.Command, "\n") {
 			for _, line := range strings.Split(c.Command, "\n")[1:] {
-				fmt.Println(th.Muted.Render("                 " + line))
+				fmt.Println(th.Muted.Render("                 " + theme.Safe(line)))
 			}
 		}
 	}
