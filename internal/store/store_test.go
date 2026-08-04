@@ -313,6 +313,46 @@ func TestLiveCommandsOnlyOwnDevice(t *testing.T) {
 	}
 }
 
+// A search whose text has no word characters cannot match anything through the
+// FTS index. Returning every row for it — which is what dropping the clause
+// does — presents the entire history as a result and hides the empty state that
+// would otherwise say the search found nothing.
+func TestUnmatchableSearchMatchesNothingRatherThanEverything(t *testing.T) {
+	s := newTestStore(t)
+	for i, text := range []string{"git push", "npm run build", "make test"} {
+		if _, err := s.AppendEvent(startEvent(t, fmt.Sprintf("c%d", i), text,
+			int64(1_700_000_000_000+i*1000))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := s.QueryCommands(Filter{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("setup stored %d rows, want 3", len(all))
+	}
+
+	for _, q := range []string{"!!!", "???", "~", "->", "   "} {
+		got, err := s.QueryCommands(Filter{Text: q, Limit: 100})
+		if err != nil {
+			t.Fatalf("%q: %v", q, err)
+		}
+		if len(got) != 0 {
+			t.Errorf("searching %q returned %d rows, want 0", q, len(got))
+		}
+	}
+
+	// Punctuation around a real token still searches for the token.
+	got, err := s.QueryCommands(Filter{Text: "!npm!", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Command != "npm run build" {
+		t.Errorf("punctuation around a token broke the search: %+v", got)
+	}
+}
+
 func TestQueryPerformanceAtScale(t *testing.T) {
 	if testing.Short() {
 		t.Skip("scale test skipped in -short mode")

@@ -317,9 +317,17 @@ func buildWhere(f Filter) (string, []any) {
 		where []string
 		args  []any
 	)
-	if q := ftsQuery(f.Text); q != "" {
-		where = append(where, `rowid IN (SELECT rowid FROM commands_fts WHERE commands_fts MATCH ?)`)
-		args = append(args, q)
+	if f.Text != "" {
+		if q := ftsQuery(f.Text); q != "" {
+			where = append(where, `rowid IN (SELECT rowid FROM commands_fts WHERE commands_fts MATCH ?)`)
+			args = append(args, q)
+		} else {
+			// The text is all punctuation, so it has no token the index could
+			// match and nothing can satisfy it. Leaving the clause out instead
+			// drops the filter entirely: `shcr list -q '???'` then prints the
+			// whole history as if it were a result.
+			where = append(where, `0`)
+		}
 	}
 	if f.Hostname != "" {
 		where = append(where, `hostname = ?`)
