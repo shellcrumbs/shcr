@@ -294,6 +294,35 @@ func TestControlSequencesNeverReachTheTerminal(t *testing.T) {
 	}
 }
 
+// The point of the fixed slots is a column you can read down, which only holds
+// if the widest thing that can land in one still fits. `43m 34s` in a chip is
+// nine columns against a slot of eight, so every row with a duration over ten
+// minutes used to shove the command text one column left of its neighbours —
+// invisible until running commands started showing elapsed time.
+func TestSlotsHoldTheWidestValueTheyCanCarry(t *testing.T) {
+	th := plainTheme(t)
+	var width int
+	for _, ms := range []int64{1, 999, 8_200, 59_900, 72_000, 2_614_000, 3_599_000, 360_000_000} {
+		row := th.Row(cmd(func(c *store.Command) {
+			c.Command = "x"
+			c.DurationMS = &ms
+			c.Hostname = "build-server"
+		}), RowOpts{Width: 100, LocalHost: "laptop", ReserveHost: true})
+		at := strings.Index(plain(row), "build-server")
+		if at < 0 {
+			t.Fatalf("%v: host chip missing from %q", time.Duration(ms)*time.Millisecond, plain(row))
+		}
+		if width == 0 {
+			width = at
+			continue
+		}
+		if at != width {
+			t.Errorf("duration %s pushed the host column to %d, other rows have it at %d:\n  %s",
+				Duration(ms), at, width, plain(row))
+		}
+	}
+}
+
 func TestStatusVocabularyIsShared(t *testing.T) {
 	for _, s := range []string{
 		store.StatusCompleted, store.StatusRunning, store.StatusFailed, store.StatusOrphaned,

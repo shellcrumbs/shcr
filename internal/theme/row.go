@@ -27,6 +27,14 @@ type RowOpts struct {
 	// BaseCwd suppresses the directory for commands that ran there. Empty means
 	// never show the directory, which is what the picker wants.
 	BaseCwd string
+	// Now, in unix millis, lets a running command show how long it has been
+	// going. Zero leaves the slot blank, which is what a row rendered for a
+	// fixed point in time — a test, a snapshot — wants.
+	Now int64
+	// ReserveHost keeps the host slot at a fixed width even on rows that do not
+	// use it. Without it the command text ends at a different column on every
+	// row, because the slot is as wide as that row's hostname.
+	ReserveHost bool
 }
 
 const (
@@ -35,7 +43,8 @@ const (
 	minCommandWidth = 16
 	// Fixed slots so durations and exit codes read as columns. Wide enough for
 	// the chip padding around "1h 30m" and "127".
-	durationSlot = 8
+	hostSlot     = 12
+	durationSlot = 9
 	exitSlot     = 5
 )
 
@@ -113,17 +122,30 @@ func (t *Theme) trailing(c store.Command, o RowOpts, level int) string {
 	}
 	// Host, only when the command ran somewhere else. On a single machine this
 	// column stays empty, which is the point.
-	if level < 2 && o.LocalHost != "" && c.Hostname != "" && c.Hostname != o.LocalHost {
-		parts = append(parts, t.chipInfo.Render(Truncate(c.Hostname, 16)))
+	if level < 2 && o.LocalHost != "" {
+		host := ""
+		if c.Hostname != "" && c.Hostname != o.LocalHost {
+			host = t.chipInfo.Render(Pad(Truncate(c.Hostname, hostSlot), hostSlot))
+		}
+		if host != "" || o.ReserveHost {
+			parts = append(parts, padLeft(host, hostSlot+2))
+		}
 	}
 	// Duration and exit code get fixed-width slots, blank-filled when absent.
 	// Right-aligning the group as a whole would let a row with an exit code
 	// shove its neighbour's duration sideways, and a duration column you cannot
 	// read down is not worth having.
 	if level < 3 {
+		// A finished command shows how long it took; one still running shows how
+		// long it has been going. Leaving that blank made a running row — the
+		// thing this tool exists to show — carry less than a finished one.
+		// Orphaned stays blank on purpose: nobody knows when it ended.
 		dur := ""
-		if c.DurationMS != nil {
+		switch {
+		case c.DurationMS != nil:
 			dur = t.chipInfo.Render(Duration(*c.DurationMS))
+		case c.Status == store.StatusRunning && o.Now > c.StartTime && c.StartTime > 0:
+			dur = t.chipInfo.Render(Duration(o.Now - c.StartTime))
 		}
 		parts = append(parts, padLeft(dur, durationSlot))
 

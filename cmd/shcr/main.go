@@ -1212,6 +1212,16 @@ func cmdList(args []string) error {
 		// standing keeps the common case — listing history from the project you
 		// are working in — free of a repeated path on every row.
 		BaseCwd: baseCwd,
+		// So a command still running shows how long it has been going.
+		Now: time.Now().UnixMilli(),
+	}
+	// One row from elsewhere reserves the host column on all of them, so the
+	// command text ends at the same column the whole way down.
+	for _, c := range cmds {
+		if c.Hostname != "" && c.Hostname != localHost {
+			opts.ReserveHost = true
+			break
+		}
 	}
 
 	// Oldest first reads like a terminal scrollback.

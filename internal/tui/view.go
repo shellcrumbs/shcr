@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/shellcrumbs/shcr/internal/theme"
 )
@@ -26,8 +28,12 @@ func (m *Model) paneWidths() (left, right int) {
 	if !m.split() {
 		return inner, 0
 	}
-	left = inner * 55 / 100
-	return left, inner - left - 1
+	// Capped, not proportional. The pane's widest real line is a hostname
+	// beside its label; letting it take 45% of a wide terminal spent the space
+	// on padding and took it from the command text, so a 120-column terminal
+	// showed less of a command than an 80-column one.
+	right = min(inner*45/100, maxDetailWidth)
+	return inner - right - 1, right
 }
 
 func (m *Model) View() string {
@@ -69,15 +75,30 @@ func (m *Model) View() string {
 
 func (m *Model) renderTop(inner int) string {
 	title := " shellcrumbs "
+	// How many rows matched, but only while filtering: unfiltered the list is
+	// capped at queryLimit, so a count would describe the page and not the
+	// history.
+	count := ""
+	if m.query != "" || statusCycle[m.statusIdx] != "" {
+		switch n := len(m.results); {
+		case n >= queryLimit:
+			count = m.theme.Muted.Render(fmt.Sprintf("%d+ matches ", queryLimit))
+		case n == 1:
+			count = m.theme.Muted.Render("1 match ")
+		default:
+			count = m.theme.Muted.Render(fmt.Sprintf("%d matches ", n))
+		}
+	}
 	// The active filter is announced in the border, with the same dot the rows
 	// use. With no filter there is nothing to say, so nothing is drawn.
 	right := ""
 	if f := statusCycle[m.statusIdx]; f != "" {
 		right = " " + m.theme.Dot(f) + m.theme.Muted.Render(" "+f) + " "
 	}
-	fill := max(inner-1-len(title)-theme.Width(right)-1, 0)
+	fill := max(inner-1-len(title)-theme.Width(count)-theme.Width(right)-1, 0)
 	return m.theme.Frame.Render("╭─") +
 		m.theme.Title.Render(title) +
+		count +
 		m.theme.Frame.Render(strings.Repeat("─", fill)) +
 		right +
 		m.theme.Frame.Render("─╮")
@@ -136,12 +157,24 @@ func (m *Model) renderList(w int) []string {
 	}
 
 	tokens := theme.Tokens(m.query)
+	now := time.Now().UnixMilli()
+	// One row from another machine is enough to reserve the column on all of
+	// them, so the command text ends at the same place down the list.
+	reserveHost := false
+	for i := m.offset; i < len(m.results) && i < m.offset+m.bodyHeight(); i++ {
+		if h := m.results[i].Hostname; h != "" && h != m.localHost {
+			reserveHost = true
+			break
+		}
+	}
 	for i := m.offset; i < len(m.results) && len(out) < m.bodyHeight(); i++ {
 		out = append(out, m.theme.Row(m.results[i], theme.RowOpts{
-			Width:     w,
-			Selected:  i == m.cursor,
-			Tokens:    tokens,
-			LocalHost: m.localHost,
+			Now:         now,
+			ReserveHost: reserveHost,
+			Width:       w,
+			Selected:    i == m.cursor,
+			Tokens:      tokens,
+			LocalHost:   m.localHost,
 			// No directory here: the detail pane carries it, and a path on every
 			// row would crowd out the command.
 		}))
@@ -165,16 +198,16 @@ func (m *Model) renderDetail(w int) []string {
 	// Status, duration and exit code all live in the selected row's chips a few
 	// columns to the left, so repeating them here would be noise. What is left
 	// is the context a chip has no room for.
-	branch := "—"
-	if c.GitBranch != nil && *c.GitBranch != "" {
-		branch = *c.GitBranch
-	}
 	rows := [][2]string{
 		{"host", c.Hostname},
 		{"dir", theme.ShortenPath(c.Cwd)},
-		{"branch", branch},
-		{"started", theme.RelativeTime(c.StartTime)},
 	}
+	// Only when there is one. A row reading "branch —" spends a line saying
+	// nothing.
+	if c.GitBranch != nil && *c.GitBranch != "" {
+		rows = append(rows, [2]string{"branch", *c.GitBranch})
+	}
+	rows = append(rows, [2]string{"started", theme.RelativeTime(c.StartTime)})
 	for _, r := range rows {
 		out = append(out, " "+m.theme.Label.Render(theme.Pad(r[0], 9))+theme.Truncate(r[1], pw-10))
 	}

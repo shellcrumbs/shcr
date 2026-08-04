@@ -24,6 +24,10 @@ import (
 // squeezed — a cramped two-pane layout reads worse than a clean list.
 const minSplitWidth = 100
 
+// maxDetailWidth is all the detail pane can use. Its longest real line is a
+// label and a hostname; the rest of the terminal belongs to the command text.
+const maxDetailWidth = 36
+
 const (
 	sessionContextLines = 3
 	queryLimit          = 200
