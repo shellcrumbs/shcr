@@ -306,12 +306,6 @@ footer { margin-top: 18px; display: flex; justify-content: space-between; font-s
 .tl-item.current .tl-rail { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-dim); }
 .tl-time { margin-left: auto; color: var(--text-faint); font-size: 11px; padding-left: 8px; }
 
-.output-note {
-  background: var(--surface); border: 1px dashed var(--border); border-radius: 8px;
-  padding: 12px 14px; font-size: 12.5px; color: var(--text-dim); line-height: 1.5;
-}
-.output-note strong { color: var(--text); }
-
 .view { display: none; }
 .view.active { display: block; }
 

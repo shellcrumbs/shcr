@@ -317,8 +317,7 @@ them as one machine's numbers rather than a benchmark suite:
 - **GCS / S3 / R2 backends.** The `Storage` interface is four methods and the
   engine is backend-agnostic, but writing them without a live bucket to test
   against would mean shipping code nobody has run.
-- **Command output capture.** The dashboard says so plainly rather than showing
-  an empty panel that reads as a bug.
+- **Command output capture.** Only the command line and its result are recorded.
 - **macOS.** Everything is pure Go and cross-compiles, but the service
   integration is systemd-only and nothing has been exercised on a Mac.
 - **Release packaging.** All four targets build with `CGO_ENABLED=0`
