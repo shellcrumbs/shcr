@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,6 +27,7 @@ import (
 	"github.com/shellcrumbs/shcr/internal/crypto"
 	"github.com/shellcrumbs/shcr/internal/daemon"
 	"github.com/shellcrumbs/shcr/internal/event"
+	"github.com/shellcrumbs/shcr/internal/export"
 	"github.com/shellcrumbs/shcr/internal/gitinfo"
 	"github.com/shellcrumbs/shcr/internal/histfile"
 	"github.com/shellcrumbs/shcr/internal/ipc"
@@ -783,9 +783,10 @@ func cmdExport(args []string) error {
 		}
 		w = f
 	}
-	buf := bufio.NewWriterSize(w, 128*1024)
-	defer buf.Flush()
-
+	outFormat, err := export.ParseFormat(*format)
+	if err != nil {
+		return err
+	}
 	f := store.Filter{
 		Text: *query, Status: *status, Hostname: *host,
 		SessionID: *session, Cwd: *cwd,
@@ -794,108 +795,14 @@ func cmdExport(args []string) error {
 		f.Since = time.Now().Add(-*since).UnixMilli()
 	}
 
-	var n int
-	switch strings.ToLower(*format) {
-	case "jsonl":
-		enc := json.NewEncoder(buf)
-		if *events {
-			err = st.EachEvent(func(ev event.Event) error { n++; return enc.Encode(ev) })
-		} else {
-			err = st.EachCommand(f, func(c store.Command) error { n++; return enc.Encode(c) })
-		}
-	case "json":
-		// One array, streamed element by element rather than assembled in memory.
-		if _, err := buf.WriteString("[\n"); err != nil {
-			return err
-		}
-		enc := json.NewEncoder(buf)
-		emit := func(v any) error {
-			if n > 0 {
-				if _, err := buf.WriteString(","); err != nil {
-					return err
-				}
-			}
-			n++
-			return enc.Encode(v)
-		}
-		if *events {
-			err = st.EachEvent(func(ev event.Event) error { return emit(ev) })
-		} else {
-			err = st.EachCommand(f, func(c store.Command) error { return emit(c) })
-		}
-		if err == nil {
-			_, err = buf.WriteString("]\n")
-		}
-	case "csv":
-		if *events {
-			return fmt.Errorf("the event log has a nested payload; use --format jsonl for --events")
-		}
-		cw := csv.NewWriter(buf)
-		defer cw.Flush()
-		if err := cw.Write([]string{
-			"id", "started", "command", "host", "cwd", "branch", "shell",
-			"status", "exit_code", "duration_ms", "session", "imported",
-		}); err != nil {
-			return err
-		}
-		err = st.EachCommand(f, func(c store.Command) error {
-			n++
-			return cw.Write([]string{
-				c.ID,
-				time.UnixMilli(c.StartTime).Format(time.RFC3339),
-				c.Command, c.Hostname, c.Cwd, derefString(c.GitBranch), c.Shell,
-				c.Status, derefInt(c.ExitCode), derefInt64(c.DurationMS),
-				c.SessionID, strconv.FormatBool(c.Imported),
-			})
-		})
-	default:
-		return fmt.Errorf("unknown format %q (want jsonl, json or csv)", *format)
-	}
+	n, err := export.Write(w, st, export.Options{Format: outFormat, Events: *events, Filter: f})
 	if err != nil {
 		return err
 	}
-	if err := buf.Flush(); err != nil {
-		return err
-	}
-
-	// The count goes to stderr so stdout stays a clean stream to pipe.
-	kind := "command"
-	if *events {
-		kind = "event"
-	}
-	fmt.Fprintf(os.Stderr, "exported %d %s(s)", n, kind)
 	if *out != "" {
-		fmt.Fprintf(os.Stderr, " to %s", *out)
-	}
-	fmt.Fprintln(os.Stderr)
-	if !*events {
-		fmt.Fprintln(os.Stderr,
-			"note: this is the derived view. `--events` exports the log it is derived from,")
-		fmt.Fprintln(os.Stderr,
-			"      which is lossless and the only form that can rebuild this database.")
+		fmt.Fprintf(os.Stderr, "wrote %d record(s) to %s\n", n, *out)
 	}
 	return nil
-}
-
-func derefString(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-
-func derefInt(p *int) string {
-	if p == nil {
-		return ""
-	}
-	return strconv.Itoa(*p)
-}
-
-func derefInt64(p *int64) string {
-	if p == nil {
-		return ""
-	}
-	return strconv.FormatInt(*p, 10)
 }
 
 // ---------------------------------------------------------------- redact
