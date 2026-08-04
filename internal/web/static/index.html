@@ -70,6 +70,7 @@
         <label class="search-input">
           <input id="search" type="search" placeholder="search commands" autocomplete="off" spellcheck="false" aria-label="Search commands">
           <span class="caret" aria-hidden="true">▊</span>
+          <kbd class="search-hint" aria-hidden="true">/</kbd>
         </label>
         <select class="chip" id="hostFilter" aria-label="Filter by host"><option value="">All hosts</option></select>
         <select class="chip" id="statusFilter" aria-label="Filter by status">
@@ -167,6 +168,22 @@
   </div>
 
 </aside>
+
+<div class="shortcuts" id="shortcuts" role="dialog" aria-modal="true"
+     aria-label="Keyboard shortcuts" aria-hidden="true">
+  <div class="shortcuts-card">
+    <h3>Keyboard</h3>
+    <dl>
+      <dt><kbd>/</kbd></dt><dd>Search</dd>
+      <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>Move between commands</dd>
+      <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move, even while searching</dd>
+      <dt><kbd>Enter</kbd></dt><dd>Open the selected command</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close the panel, then clear the search</dd>
+      <dt><kbd>?</kbd></dt><dd>This list</dd>
+    </dl>
+    <p class="shortcuts-foot">Press <kbd>Esc</kbd> or click anywhere to dismiss.</p>
+  </div>
+</div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 

@@ -185,6 +185,9 @@ Activity over the last 24 hours, stat cards, a filterable table, a detail
 slide-over showing what ran either side of a command in the same shell, and a
 settings page — updating live over a server-sent event stream.
 
+Press <kbd>?</kbd> for the keyboard shortcuts: `/` searches, `j`/`k` and the
+arrows move between commands, `⏎` opens one, `Esc` backs out.
+
 It follows your system's light or dark setting, with a toggle in the sidebar to
 override it. That choice is the only thing the page keeps in your browser, and
 clicking back to "System" removes it again.

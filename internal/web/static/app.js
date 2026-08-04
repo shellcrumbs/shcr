@@ -79,6 +79,9 @@ const state = {
   total: 0,
   devices: [],
   filters: { q: "", host: "", status: "" },
+  // Which row the keyboard is on. -1 is "none yet", so the first press of j or
+  // down lands on the newest command rather than the second one.
+  cursor: -1,
   selected: null,
 };
 
@@ -154,9 +157,54 @@ function renderRows() {
         ? "No commands match these filters."
         : "Nothing recorded yet. Run a command in a shell with the hooks loaded."));
   } else {
-    rows.forEach((c) => container.appendChild(commandRow(c)));
+    rows.forEach((c, i) => {
+      const row = commandRow(c);
+      if (i === state.cursor) row.classList.add("cursor");
+      container.appendChild(row);
+    });
   }
+  state.visible = rows;
   $("footCount").textContent = `Showing ${rows.length} of ${state.total} commands`;
+}
+
+// ---- Keyboard -----------------------------------------------------------
+
+// The table is a list and behaves like one everywhere else; it should here too.
+function moveCursor(delta) {
+  const rows = state.visible || [];
+  if (rows.length === 0) return;
+  const next = state.cursor < 0
+    ? (delta > 0 ? 0 : rows.length - 1)
+    : Math.min(Math.max(state.cursor + delta, 0), rows.length - 1);
+  if (next === state.cursor) return;
+  state.cursor = next;
+
+  const nodes = $("rows").querySelectorAll(".row.data");
+  nodes.forEach((n, i) => n.classList.toggle("cursor", i === state.cursor));
+  const node = nodes[state.cursor];
+  if (node) node.scrollIntoView({ block: "nearest" });
+
+  // Following the selection while the panel is open turns j/k into a way of
+  // reading through history, rather than a way of closing and reopening it.
+  if (state.selected) openDetail(rows[state.cursor].id);
+}
+
+function openCursor() {
+  const rows = state.visible || [];
+  if (state.cursor >= 0 && rows[state.cursor]) openDetail(rows[state.cursor].id);
+}
+
+function toggleShortcuts(show) {
+  const box = $("shortcuts");
+  box.classList.toggle("open", show);
+  box.setAttribute("aria-hidden", show ? "false" : "true");
+}
+
+// Typing "j" in a text field must type a j. Only the keys that cannot be
+// confused with input — Escape, and the arrows — work while one has focus.
+function isTyping(target) {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement;
 }
 
 // ------------------------------------------------------------------ loading
@@ -485,12 +533,39 @@ function wire() {
   $("navSettings").addEventListener("click", () => showView("settings"));
   $("closeBtn").addEventListener("click", closeDetail);
   $("scrim").addEventListener("click", closeDetail);
+  $("shortcuts").addEventListener("click", () => toggleShortcuts(false));
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeDetail();
-    if (e.key === "/" && document.activeElement !== $("search")) {
-      e.preventDefault();
-      $("search").focus();
+    const typing = isTyping(e.target);
+
+    if (e.key === "Escape") {
+      // In the order they are in the way: the panel covers the page, the
+      // search hides most of the history, and clearing either is what Escape
+      // is for.
+      if ($("shortcuts").classList.contains("open")) toggleShortcuts(false);
+      else if (state.selected) closeDetail();
+      else if ($("search").value) {
+        $("search").value = "";
+        $("search").dispatchEvent(new Event("input"));
+      }
+      return;
     }
+    if (e.key === "ArrowDown" || (e.key === "j" && !typing)) {
+      e.preventDefault(); moveCursor(1); return;
+    }
+    if (e.key === "ArrowUp" || (e.key === "k" && !typing)) {
+      e.preventDefault(); moveCursor(-1); return;
+    }
+    if (e.key === "Enter" && !state.selected) {
+      // Rows are buttons: if one holds focus the browser will click it, and
+      // opening it here as well would fire twice.
+      if (!(e.target instanceof HTMLButtonElement)) openCursor();
+      return;
+    }
+    if (typing) return;
+
+    if (e.key === "/") { e.preventDefault(); $("search").focus(); }
+    if (e.key === "?") { e.preventDefault(); toggleShortcuts(true); }
   });
 
   $("search").addEventListener("input", (e) => {

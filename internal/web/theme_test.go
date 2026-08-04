@@ -87,3 +87,39 @@ func TestThemePreferenceIsAppliedBeforePaint(t *testing.T) {
 		t.Error("theme.js should only set the attribute")
 	}
 }
+
+// The shortcuts are only worth having if they can be found. Nothing in the page
+// hinted at the two that already existed, which is why nobody used them.
+func TestKeyboardShortcutsAreDiscoverable(t *testing.T) {
+	html, err := os.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(html)
+	if !strings.Contains(page, `class="search-hint"`) {
+		t.Error(`the search box should advertise "/"`)
+	}
+	if !strings.Contains(page, `id="shortcuts"`) {
+		t.Error("no shortcuts overlay")
+	}
+	for _, key := range []string{"/", "j", "k", "Enter", "Esc", "?"} {
+		if !strings.Contains(page, "<kbd>"+key+"</kbd>") {
+			t.Errorf("the overlay does not list %q", key)
+		}
+	}
+
+	js, err := os.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := string(js)
+	for _, k := range []string{`"Escape"`, `"ArrowDown"`, `"ArrowUp"`, `"j"`, `"k"`, `"/"`, `"?"`} {
+		if !strings.Contains(code, k) {
+			t.Errorf("no handler for %s", k)
+		}
+	}
+	// A letter shortcut that fires while typing makes the search box unusable.
+	if !strings.Contains(code, "isTyping") {
+		t.Error("letter shortcuts must be suppressed inside text fields")
+	}
+}
