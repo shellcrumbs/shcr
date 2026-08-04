@@ -39,7 +39,7 @@ func TestStatsCountExecutionsAndOutcomes(t *testing.T) {
 	// One still running.
 	mustAppend(t, s, startEvent(t, "c10", "npm run dev", at+5*hour))
 
-	if _, err := s.RefreshCommandStats(0); err != nil {
+	if _, _, err := s.RefreshCommandStats(0); err != nil {
 		t.Fatal(err)
 	}
 	got := statsByCommand(t, s)
@@ -86,14 +86,14 @@ func TestIncrementalRefreshMatchesAFullRebuild(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.RefreshCommandStats(w); err != nil {
+		if _, _, err := s.RefreshCommandStats(w); err != nil {
 			t.Fatalf("round %d: %v", round, err)
 		}
 	}
 	incremental := statsByCommand(t, s)
 
 	// Now throw it away and rebuild from nothing.
-	if _, err := s.RefreshCommandStats(0); err != nil {
+	if _, _, err := s.RefreshCommandStats(0); err != nil {
 		t.Fatal(err)
 	}
 	full := statsByCommand(t, s)
@@ -119,13 +119,44 @@ func TestIncrementalRefreshMatchesAFullRebuild(t *testing.T) {
 	}
 }
 
+// The watermark counts through the event log rather than through time, because
+// events do not arrive in the order they happened. A command pulled from a peer
+// carries the time it ran at, which can predate everything already here — and a
+// watermark on start_time would step straight over it, leaving the command out
+// of the ranking cache for good.
+func TestOlderArrivalsStillReachTheCache(t *testing.T) {
+	s := newTestStore(t)
+	now := int64(1_700_000_000_000)
+	day := int64(24 * time.Hour / time.Millisecond)
+
+	mustAppend(t, s, startEvent(t, "local", "npm run build", now))
+	_, w, err := s.RefreshCommandStats(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Arrives now, but ran a week ago on another machine.
+	mustAppend(t, s, startEvent(t, "remote", "terraform apply", now-7*day))
+
+	n, _, err := s.RefreshCommandStats(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("refresh touched %d commands, want the one that arrived", n)
+	}
+	if _, ok := statsByCommand(t, s)["terraform apply"]; !ok {
+		t.Error("a command that arrived late but ran earlier never reached the cache")
+	}
+}
+
 // A command whose every execution has been redacted is no longer a command.
 func TestRedactedCommandsLeaveTheCache(t *testing.T) {
 	s := newTestStore(t)
 	at := int64(1_700_000_000_000)
 	mustAppend(t, s, startEvent(t, "c1", "export TOKEN=hunter2", at))
 	mustAppend(t, s, endEvent(t, "c1", 0, at+10))
-	if _, err := s.RefreshCommandStats(0); err != nil {
+	if _, _, err := s.RefreshCommandStats(0); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := statsByCommand(t, s)["export TOKEN=hunter2"]; !ok {
@@ -133,7 +164,7 @@ func TestRedactedCommandsLeaveTheCache(t *testing.T) {
 	}
 
 	mustAppend(t, s, mkEvent(t, "c1", event.TypeRedact, map[string]any{}, at+20))
-	if _, err := s.RefreshCommandStats(0); err != nil {
+	if _, _, err := s.RefreshCommandStats(0); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := statsByCommand(t, s)["export TOKEN=hunter2"]; ok {
@@ -177,8 +208,14 @@ func TestStatsRefreshAndReadAtScale(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// One real event, so the log is not empty: the watermark counts through the
+	// event log, and a database seeded straight into commands would leave it at
+	// zero — which means "rebuild" and would make the increments below
+	// measure a full pass.
+	mustAppend(t, s, startEvent(t, "seed", "echo seed", int64(1_700_000_000_000)))
+
 	started := time.Now()
-	changed, err := s.RefreshCommandStats(0)
+	changed, _, err := s.RefreshCommandStats(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +250,7 @@ func TestStatsRefreshAndReadAtScale(t *testing.T) {
 		mustAppend(t, s, startEvent(t, fmt.Sprintf("fresh%d", i), fmt.Sprintf("echo hello %d", i),
 			int64(1_700_000_000_000+n*1000+int64(i+1)*5000)))
 		started = time.Now()
-		if _, err := s.RefreshCommandStats(w); err != nil {
+		if _, _, err := s.RefreshCommandStats(w); err != nil {
 			t.Fatal(err)
 		}
 		took := time.Since(started)

@@ -27,56 +27,69 @@ type CommandStat struct {
 
 // RefreshCommandStats brings the ranking cache up to date.
 //
-// Only commands with an execution newer than the watermark are touched, and
-// each of those is recomputed from all of its executions rather than adjusted.
-// Recomputing is what makes this correct without transition bookkeeping: there
-// is no way to double count, no way to drift, and a redaction that rewrites a
-// command's text fixes itself on the next pass.
+// from is a position in the event log, not a point in time. That distinction
+// matters: events do not arrive in the order they happened. A command pulled
+// from a peer can carry last week's timestamp, and a watermark on start_time
+// would step straight over it — the command would never enter the cache at
+// all. The event log's rowid only ever goes up, whoever produced the event.
 //
-// Pass 0 as the watermark to rebuild everything.
-func (s *Store) RefreshCommandStats(from int64) (int, error) {
-	if from == 0 {
-		if _, err := s.db.Exec(`DELETE FROM command_stats`); err != nil {
-			return 0, err
-		}
+// Each changed command is recomputed from all of its executions rather than
+// adjusted. That is what makes this correct without transition bookkeeping:
+// nothing can double count, nothing drifts, and a redaction that rewrites a
+// command's text repairs itself on the next pass.
+//
+// Pass 0 to rebuild everything. It returns the number of commands touched and
+// the new watermark.
+func (s *Store) RefreshCommandStats(from int64) (int, int64, error) {
+	// Fix the upper bound first, so events landing while this runs are left for
+	// the next pass rather than skipped by a watermark that ran ahead of them.
+	var upTo int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(rowid), 0) FROM events`).Scan(&upTo); err != nil {
+		return 0, from, err
 	}
 
-	// Which commands have moved.
-	//
-	// INDEXED BY is doing real work here. Left to choose, SQLite scans
-	// idx_commands_command end to end, because that index satisfies the DISTINCT
-	// without a temporary B-tree — and ignores the far more selective time
-	// bound. That turned "refresh after one new command" into a 95ms full index
-	// scan. Forcing the range search and paying for a temp B-tree over the
-	// handful of matching rows takes it to under a millisecond. It also means
-	// that if the index is ever dropped this fails loudly rather than quietly
-	// going back to scanning everything.
-	rows, err := s.db.Query(
-		`SELECT DISTINCT command FROM commands INDEXED BY idx_commands_start
-		  WHERE start_time >= ? AND command <> ''`, from)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if from <= 0 {
+		if _, err := s.db.Exec(`DELETE FROM command_stats`); err != nil {
+			return 0, from, err
+		}
+		rows, err = s.db.Query(`SELECT DISTINCT command FROM commands WHERE command <> ''`)
+	} else {
+		// INDEXED BY is doing real work on the equivalent commands query: left
+		// to choose, SQLite scans an index end to end when it satisfies a
+		// DISTINCT, ignoring a far more selective bound. Here the events rowid
+		// is the primary key, so the range is already the cheap path.
+		rows, err = s.db.Query(`
+			SELECT DISTINCT c.command
+			  FROM events e JOIN commands c ON c.id = e.command_id
+			 WHERE e.rowid > ? AND e.rowid <= ? AND c.command <> ''`, from, upTo)
+	}
 	if err != nil {
-		return 0, err
+		return 0, from, err
 	}
 	var changed []string
 	for rows.Next() {
 		var c string
 		if err := rows.Scan(&c); err != nil {
 			rows.Close()
-			return 0, err
+			return 0, from, err
 		}
 		changed = append(changed, c)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return 0, from, err
 	}
 	if len(changed) == 0 {
-		return 0, nil
+		return 0, upTo, s.setStatsWatermark(upTo)
 	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		return 0, err
+		return 0, from, err
 	}
 	defer tx.Rollback()
 
@@ -93,41 +106,37 @@ func (s *Store) RefreshCommandStats(from int64) (int, error) {
 		    unfinished=excluded.unfinished, imported_runs=excluded.imported_runs,
 		    last_failed_at=excluded.last_failed_at`)
 	if err != nil {
-		return 0, err
+		return 0, from, err
 	}
 	defer upsert.Close()
 
-	var watermark int64
 	for _, cmd := range changed {
 		st, err := statFor(tx, cmd)
 		if err != nil {
-			return 0, err
+			return 0, from, err
 		}
 		if st.Runs == 0 {
 			// Every execution of it was redacted away.
 			if _, err := tx.Exec(`DELETE FROM command_stats WHERE command = ?`, cmd); err != nil {
-				return 0, err
+				return 0, from, err
 			}
 			continue
-		}
-		if st.LastTime > watermark {
-			watermark = st.LastTime
 		}
 		if _, err := upsert.Exec(cmd, st.Runs, st.LastTime,
 			st.Frecency.Weight, st.Frecency.At, st.Succeeded, st.Failed, st.NeverRan,
 			st.Interrupted, st.Unfinished, st.ImportedRuns, st.LastFailedAt); err != nil {
-			return 0, err
+			return 0, from, err
 		}
 	}
+	if _, err := tx.Exec(`UPDATE stats_meta SET watermark = ? WHERE id = 1`, upTo); err != nil {
+		return 0, from, err
+	}
+	return len(changed), upTo, tx.Commit()
+}
 
-	// One millisecond past the newest execution seen, so the next pass does not
-	// redo the whole tail of this one.
-	if watermark > 0 {
-		if _, err := tx.Exec(`UPDATE stats_meta SET watermark = ? WHERE id = 1`, watermark+1); err != nil {
-			return 0, err
-		}
-	}
-	return len(changed), tx.Commit()
+func (s *Store) setStatsWatermark(w int64) error {
+	_, err := s.db.Exec(`UPDATE stats_meta SET watermark = ? WHERE id = 1`, w)
+	return err
 }
 
 // statFor recomputes one command's statistics from all of its executions.
@@ -183,7 +192,8 @@ func statFor(tx *sql.Tx, command string) (CommandStat, error) {
 	return st, rows.Err()
 }
 
-// StatsWatermark is the point the ranking cache has been refreshed to.
+// StatsWatermark is how far through the event log the ranking cache has been
+// refreshed — a rowid, not a time.
 func (s *Store) StatsWatermark() (int64, error) {
 	var w int64
 	err := s.db.QueryRow(`SELECT watermark FROM stats_meta WHERE id = 1`).Scan(&w)

@@ -106,4 +106,15 @@ CREATE TABLE IF NOT EXISTS stats_meta (
 );
 INSERT OR IGNORE INTO stats_meta (id, watermark) VALUES (1, 0);
 `,
+	// 5: the ranking watermark counts through the event log rather than
+	// through time.
+	//
+	// Events do not arrive in the order they happened: a command pulled from a
+	// peer carries the timestamp it ran at, which can be older than anything
+	// already recorded here, and a watermark on start_time steps straight over
+	// it. Such a command would never enter the cache at all. Reset to zero so
+	// the next refresh rebuilds once under the new meaning.
+	`
+UPDATE stats_meta SET watermark = 0;
+`,
 }

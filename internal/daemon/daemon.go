@@ -94,6 +94,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	} else if n > 0 {
 		d.logger.Printf("replayed %d spooled event(s)", n)
 	}
+	if n, err := d.RefreshStats(); err != nil {
+		d.logger.Printf("ranking cache: %v", err)
+	} else if n > 0 {
+		d.logger.Printf("ranking cache: refreshed %d command(s)", n)
+	}
 	if n, err := d.SweepOrphans(); err != nil {
 		d.logger.Printf("startup sweep: %v", err)
 	} else if n > 0 {
@@ -285,6 +290,20 @@ func (d *Daemon) drainFile(path string) (int, error) {
 	return n, sc.Err()
 }
 
+// RefreshStats brings the ranking cache up to date with whatever has arrived
+// since it was last refreshed — locally, or pulled from a peer.
+//
+// The first call on a database that has never had one rebuilds the cache from
+// scratch, because the watermark starts at zero.
+func (d *Daemon) RefreshStats() (int, error) {
+	from, err := d.store.StatsWatermark()
+	if err != nil {
+		return 0, err
+	}
+	n, _, err := d.store.RefreshCommandStats(from)
+	return n, err
+}
+
 func (d *Daemon) sweepLoop(ctx context.Context) {
 	t := time.NewTicker(sweepInterval)
 	defer t.Stop()
@@ -297,6 +316,11 @@ func (d *Daemon) sweepLoop(ctx context.Context) {
 				d.logger.Printf("sweep: %v", err)
 			} else if n > 0 {
 				d.logger.Printf("marked %d command(s) orphaned", n)
+			}
+			// Cheap when there is nothing new: the watermark means this looks at
+			// the commands that have run since the last pass and no others.
+			if _, err := d.RefreshStats(); err != nil {
+				d.logger.Printf("ranking cache: %v", err)
 			}
 		}
 	}

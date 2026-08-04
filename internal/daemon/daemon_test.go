@@ -98,6 +98,41 @@ func TestDrainTakesBothTheAbandonedAndTheCurrentSpool(t *testing.T) {
 	}
 }
 
+// The picker ranks from the stats cache, so a command that has run must reach
+// it. The daemon keeps it warm; the watermark keeps that cheap.
+func TestDaemonRefreshesTheRankingCache(t *testing.T) {
+	d := testDaemon(t)
+
+	if err := d.ingest(spoolLine(t, "first")); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := d.RefreshStats(); err != nil || n == 0 {
+		t.Fatalf("refresh reported %d commands, err %v", n, err)
+	}
+	stats, err := d.store.CommandStats(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].Command != "echo first" {
+		t.Fatalf("cache holds %+v", stats)
+	}
+
+	// A second pass with nothing new must not redo the first command.
+	if n, err := d.RefreshStats(); err != nil || n != 0 {
+		t.Errorf("idle refresh touched %d commands (err %v), want 0", n, err)
+	}
+
+	if err := d.ingest(spoolLine(t, "second")); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := d.RefreshStats(); err != nil || n != 1 {
+		t.Errorf("refresh after one new command touched %d (err %v), want 1", n, err)
+	}
+	if stats, _ = d.store.CommandStats(0); len(stats) != 2 {
+		t.Errorf("cache holds %d commands, want 2", len(stats))
+	}
+}
+
 func TestDrainWithNothingToDoIsNotAnError(t *testing.T) {
 	d := testDaemon(t)
 	n, err := d.DrainSpool()
