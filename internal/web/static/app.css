@@ -23,34 +23,35 @@
 }
 
 :root {
-  /* Without this the browser renders its own parts — the select dropdowns, the
-     search field's affordances, scrollbars — in light mode against a near-black
-     page. */
-  color-scheme: dark;
+  /* Follows the system unless the toggle says otherwise. It also tells the
+     browser how to draw its own parts — select dropdowns, the search field's
+     affordances, scrollbars — which would otherwise be light against a
+     near-black page. */
+  color-scheme: light dark;
 
-  --bg: #0B0E13;
-  --bg-raised: #10141C;
-  --surface: #151A24;
-  --surface-hover: #1B212D;
-  --border: #232A38;
-  --border-soft: #1A202C;
-  --text: #E7E9EE;
-  --text-dim: #8892A4;
-  --text-faint: #545E70;
-  --accent: #5FD4C0;
-  --accent-dim: #2E5C55;
-  --success: #6FCF97;
-  --success-dim: #274436;
-  --danger: #E8664F;
-  --danger-dim: #4A2620;
-  --warning: #E0A64B;
-  --warning-dim: #453623;
+  --bg: light-dark(#F4F6F8, #0B0E13);
+  --bg-raised: light-dark(#FAFBFC, #10141C);
+  --surface: light-dark(#FFFFFF, #151A24);
+  --surface-hover: light-dark(#EEF2F6, #1B212D);
+  --border: light-dark(#D6DCE3, #232A38);
+  --border-soft: light-dark(#E7EBF0, #1A202C);
+  --text: light-dark(#1B2028, #E7E9EE);
+  --text-dim: light-dark(#576070, #8892A4);
+  --text-faint: light-dark(#7C8697, #545E70);
+  --accent: light-dark(#0F7A6B, #5FD4C0);
+  --accent-dim: light-dark(#CFEDE7, #2E5C55);
+  --success: light-dark(#1A7F4B, #6FCF97);
+  --success-dim: light-dark(#DAF0E3, #274436);
+  --danger: light-dark(#B3271A, #E8664F);
+  --danger-dim: light-dark(#FADFDA, #4A2620);
+  --warning: light-dark(#8A6100, #E0A64B);
+  --warning-dim: light-dark(#F7EAD2, #453623);
   /* Named rather than inlined, because these four are the values that assume a
      dark page: a white-on-black texture and near-black shadows. */
-  --glow: rgba(95, 212, 192, 0.06);
-  --texture: rgba(255, 255, 255, 0.006);
-  --scrim: rgba(5, 7, 10, 0.55);
-  --drawer-shadow: rgba(0, 0, 0, 0.35);
+  --glow: light-dark(rgba(15, 122, 107, 0.05), rgba(95, 212, 192, 0.06));
+  --texture: light-dark(rgba(0, 0, 0, 0.015), rgba(255, 255, 255, 0.006));
+  --scrim: light-dark(rgba(20, 28, 40, 0.30), rgba(5, 7, 10, 0.55));
+  --drawer-shadow: light-dark(rgba(15, 25, 40, 0.12), rgba(0, 0, 0, 0.35));
 
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -59,41 +60,12 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-/* The same twenty-one names, resolved for a light page. Every colour in this
-   stylesheet goes through a variable, so this block is the whole theme.
-   Contrast against --bg and --surface was checked rather than eyeballed: body
-   text clears 15:1, the status colours clear 4.5:1, the faintest text clears
-   3:1. */
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-
-    --bg: #F4F6F8;
-    --bg-raised: #FAFBFC;
-    --surface: #FFFFFF;
-    --surface-hover: #EEF2F6;
-    --border: #D6DCE3;
-    --border-soft: #E7EBF0;
-    --text: #1B2028;
-    --text-dim: #576070;
-    --text-faint: #7C8697;
-    --accent: #0F7A6B;
-    --accent-dim: #CFEDE7;
-    --success: #1A7F4B;
-    --success-dim: #DAF0E3;
-    --danger: #B3271A;
-    --danger-dim: #FADFDA;
-    --warning: #8A6100;
-    --warning-dim: #F7EAD2;
-
-    /* Elevation reads as a shadow on a light page, not as a lighter surface,
-       and the dark theme's white scanline texture would be invisible. */
-    --glow: rgba(15, 122, 107, 0.05);
-    --texture: rgba(0, 0, 0, 0.015);
-    --scrim: rgba(20, 28, 40, 0.30);
-    --drawer-shadow: rgba(15, 25, 40, 0.12);
-  }
-}
+/* The toggle. Setting color-scheme is the whole mechanism: every colour above
+   is a light-dark() pair, so the browser re-resolves all of them. No second
+   palette to keep in step, and no JavaScript involved in the colours
+   themselves. Absent the attribute, the system decides. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
 
 body {
   background: var(--bg);
@@ -119,6 +91,11 @@ button { font-family: inherit; cursor: pointer; }
   border-right: 1px solid var(--border-soft);
   padding: 24px 16px;
   display: flex; flex-direction: column; gap: 28px;
+  /* Sticky, because the column is as tall as the command table and anything
+     at its foot — the theme control, the device list — was otherwise a
+     thousand pixels below the fold. */
+  position: sticky; top: 0; align-self: start;
+  max-height: 100vh; overflow-y: auto;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
 .brand-mark {
@@ -416,3 +393,15 @@ footer { margin-top: 18px; display: flex; justify-content: space-between; font-s
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ---- Theme toggle ---- */
+.theme-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
+  background: transparent; border: 1px solid var(--border-soft); border-radius: var(--radius);
+  color: var(--text-dim); font: 500 12px/1 var(--sans); cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.theme-toggle:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border); }
+.theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-icon { width: 14px; height: 14px; display: inline-flex; }
+.theme-icon svg { width: 100%; height: 100%; }

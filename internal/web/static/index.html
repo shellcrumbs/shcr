@@ -6,6 +6,8 @@
 <title>Shellcrumbs — command dashboard</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235FD4C0'/%3E%3Ccircle cx='11' cy='16' r='3' fill='%2308110F'/%3E%3Ccircle cx='21' cy='16' r='3' fill='%2308110F'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/app.css">
+<!-- Before the stylesheet is applied, so a stored preference never flashes. -->
+<script src="/theme.js"></script>
 </head>
 <body>
 <div class="app">
@@ -27,7 +29,14 @@
       </button>
     </nav>
 
+    <button class="theme-toggle" id="themeToggle" type="button"
+            title="Switch between system, light and dark">
+      <span class="theme-icon" id="themeIcon" aria-hidden="true"></span>
+      <span id="themeLabel">System</span>
+    </button>
+
     <div class="sidebar-footer" id="sidebarDevices"></div>
+
   </aside>
 
   <main>

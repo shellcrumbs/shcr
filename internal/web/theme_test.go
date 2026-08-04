@@ -14,52 +14,76 @@ var (
 	rootBlockRe = regexp.MustCompile(`(?sm)^:root \{.*?\n\}`)
 )
 
-// Every colour in the stylesheet goes through a variable, so the light theme is
-// exactly the set of overrides. A colour added to :root and forgotten in the
-// light block does not fail loudly — it just renders a dark value on a light
-// page, on somebody else's machine.
-func TestLightThemeOverridesEveryColour(t *testing.T) {
+// Every colour goes through a variable, and every variable must carry both a
+// light and a dark value. A colour added with only one would silently render a
+// dark value on a light page — on somebody else's machine, not the author's.
+func TestEveryColourDefinesBothThemes(t *testing.T) {
 	css, err := os.ReadFile("static/app.css")
 	if err != nil {
 		t.Fatal(err)
-	}
-	light := lightBlock.Find(css)
-	if light == nil {
-		t.Fatal("no prefers-color-scheme: light block")
 	}
 	root := rootBlockRe.Find(css)
 	if root == nil {
 		t.Fatal("no :root block")
 	}
-
-	lightVars := map[string]bool{}
-	for _, m := range cssVarDecl.FindAllStringSubmatch(string(light), -1) {
-		lightVars[m[1]] = true
-	}
 	for _, m := range cssVarDecl.FindAllStringSubmatch(string(root), -1) {
 		name, value := m[1], strings.TrimSpace(m[2])
-		if !isColour.MatchString(value) {
-			continue // --mono, --sans, --radius: nothing to re-theme
+		if !isColour.MatchString(value) && !strings.HasPrefix(value, "light-dark(") {
+			continue // --mono, --sans, --radius: nothing to theme
 		}
-		if !lightVars[name] {
-			t.Errorf("%s is a colour in :root with no light value (%s)", name, value)
+		if !strings.HasPrefix(value, "light-dark(") {
+			t.Errorf("%s is a bare colour (%s); it needs a light-dark() pair", name, value)
 		}
 	}
 }
 
-// Without color-scheme the browser draws its own parts — select dropdowns, the
-// search field, scrollbars — in light mode against a near-black page.
-func TestBothSchemesDeclareColorScheme(t *testing.T) {
+// The toggle works by changing color-scheme, which re-resolves every
+// light-dark() above it. Without these the button would set an attribute that
+// nothing reads.
+func TestThemeOverridesExist(t *testing.T) {
 	css, err := os.ReadFile("static/app.css")
 	if err != nil {
 		t.Fatal(err)
 	}
+	text := string(css)
 	root := string(rootBlockRe.Find(css))
-	if !strings.Contains(root, "color-scheme: dark") {
-		t.Error(":root does not declare color-scheme: dark")
+	if !strings.Contains(root, "color-scheme: light dark") {
+		t.Error(":root should follow the system by default (color-scheme: light dark)")
 	}
-	light := string(lightBlock.Find(css))
-	if !strings.Contains(light, "color-scheme: light") {
-		t.Error("the light block does not declare color-scheme: light")
+	for _, want := range []string{
+		`:root[data-theme="light"]`,
+		`:root[data-theme="dark"]`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing the %s override", want)
+		}
+	}
+}
+
+// The preference is applied from a blocking script in <head>. In app.js — which
+// loads at the end of <body> — it would run after the first paint, flashing the
+// wrong theme on every load for anyone whose choice differs from their system.
+// An inline script would be the usual fix and the CSP forbids it.
+func TestThemePreferenceIsAppliedBeforePaint(t *testing.T) {
+	html, err := os.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(html)
+	head := text[:strings.Index(text, "</head>")]
+	if !strings.Contains(head, `<script src="/theme.js">`) {
+		t.Error("theme.js must load from <head>, before anything is painted")
+	}
+	if strings.Contains(head, `src="/theme.js" defer`) || strings.Contains(head, `src="/theme.js" async`) {
+		t.Error("theme.js must not be deferred; that is the flash it exists to prevent")
+	}
+	js, err := os.ReadFile("static/theme.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It runs before the CSS is known to have applied, so it must touch nothing
+	// but the attribute.
+	if strings.Contains(string(js), "fetch(") || strings.Contains(string(js), "document.body") {
+		t.Error("theme.js should only set the attribute")
 	}
 }

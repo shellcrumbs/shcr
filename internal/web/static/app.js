@@ -545,7 +545,47 @@ function wire() {
   });
 }
 
+// ---- Theme toggle -------------------------------------------------------
+// Three states rather than two, because "follow the system" is a real answer
+// and the only one that stays right when the machine switches at sunset.
+const THEMES = ["system", "light", "dark"];
+
+const THEME_ICONS = {
+  system: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8"/></svg>',
+  light: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+};
+
+function currentTheme() {
+  const set = document.documentElement.getAttribute("data-theme");
+  return set === "light" || set === "dark" ? set : "system";
+}
+
+function applyTheme(theme) {
+  if (theme === "system") {
+    document.documentElement.removeAttribute("data-theme");
+    try { localStorage.removeItem("shcr-theme"); } catch (e) {}
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("shcr-theme", theme); } catch (e) {}
+  }
+  const label = theme.charAt(0).toUpperCase() + theme.slice(1);
+  $("themeLabel").textContent = label;
+  // Static markup, one of three constants above — no interpolation reaches it.
+  $("themeIcon").innerHTML = THEME_ICONS[theme];
+  $("themeToggle").setAttribute("aria-label", `Theme: ${label}. Click to change.`);
+}
+
+function initTheme() {
+  applyTheme(currentTheme());
+  $("themeToggle").addEventListener("click", () => {
+    const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
+    applyTheme(next);
+  });
+}
+
 async function boot() {
+  initTheme();
   wire();
   try {
     // Devices first, and not in parallel with the rest: it carries the home
