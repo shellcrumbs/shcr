@@ -81,6 +81,8 @@ func main() {
 		err = cmdSync(os.Args[2:])
 	case "redact":
 		err = cmdRedact(os.Args[2:])
+	case "rank":
+		err = cmdRank(os.Args[2:])
 	case "import":
 		err = cmdImport(os.Args[2:])
 	case "export":
@@ -116,6 +118,7 @@ usage: shcr <command> [flags]
   key init|show|import   manage the end-to-end encryption key
   sync now|status|enable cross-machine sync
   redact <id>            replace a recorded command with a tombstone
+  rank stats|forget      how well the picker's ordering is doing
   import [file...]       bring in an existing shell history file
   export                 write your history out, to stdout or a file
   event start|end        record an event (called by the shell hooks)
@@ -937,6 +940,60 @@ func cmdRedact(args []string) error {
 }
 
 // ---------------------------------------------------------------- init
+
+// ---------------------------------------------------------------- rank
+
+func cmdRank(args []string) error {
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	st, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	th := theme.New(os.Stdout)
+
+	switch sub {
+	case "", "stats":
+		m, err := st.RankingMetrics()
+		if err != nil {
+			return err
+		}
+		if m.Searches == 0 {
+			fmt.Println(th.Muted.Render("No searches recorded yet.\n\n" +
+				"This is measured from the commands you pick after typing something.\n" +
+				"Opening the picker and taking the top row says nothing about the\n" +
+				"ordering, so it is not counted."))
+			return nil
+		}
+		for _, row := range [][2]string{
+			{"searches", fmt.Sprintf("%d", m.Searches)},
+			{"already 1st", fmt.Sprintf("%.0f%%", 100*m.TopOne)},
+			{"in top 3", fmt.Sprintf("%.0f%%", 100*m.TopThree)},
+			{"MRR", fmt.Sprintf("%.3f", m.MRR)},
+			{"median rank", fmt.Sprintf("%d", m.MedianRank)},
+		} {
+			fmt.Printf("%s  %s\n", th.Label.Render(theme.Pad(row[0], 12)), row[1])
+		}
+		fmt.Println()
+		fmt.Println(th.Muted.Render(
+			"From a local log of which command you picked for which query. It never\n" +
+				"syncs and is never exported. `shcr rank forget` empties it, and\n" +
+				"ranking.log_acceptances in the config turns it off."))
+		return nil
+
+	case "forget":
+		n, err := st.ForgetAcceptances()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Forgot %d recorded search(es).\n", n)
+		return nil
+	}
+	return fmt.Errorf("rank: unknown subcommand %q (want 'stats' or 'forget')", sub)
+}
 
 func cmdInit(args []string) error {
 	if len(args) != 1 {

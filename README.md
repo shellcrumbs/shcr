@@ -232,6 +232,12 @@ ssh into will not sweep orphans or sync while you are away.
 
 - **Command output is not captured.** Only the command line, its metadata and
   its result.
+- **The picker keeps a local record of what you searched for** — the query, the
+  command you chose and where it ranked — because there is no other way to tell
+  whether a change to the ordering helped or merely changed it. It is not an
+  event, so it never syncs, and not a command, so `shcr export` does not carry
+  it. `shcr rank stats` shows what it is for, `shcr rank forget` empties it, and
+  `ranking.log_acceptances: false` in the config turns it off.
 - **Secrets are filtered before anything is written** — in the sender, so they
   never reach the spool file either, and again in the daemon as a backstop.
 - **`shcr redact` propagates.** It appends an event, so the text is replaced on

@@ -15,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/shellcrumbs/shcr/internal/config"
 	"github.com/shellcrumbs/shcr/internal/gitinfo"
 	"github.com/shellcrumbs/shcr/internal/ipc"
 	"github.com/shellcrumbs/shcr/internal/store"
@@ -72,6 +73,9 @@ type Model struct {
 	statsFull bool
 	where     store.Where
 
+	// logAcceptances mirrors the config setting, read once at construction.
+	logAcceptances bool
+
 	width, height int
 	copied        bool
 	err           error
@@ -112,6 +116,9 @@ func New(st *store.Store, th *theme.Theme, initialQuery string) *Model {
 		Hostname:  host,
 		SessionID: os.Getenv("SHCR_SESSION_ID"),
 		Branch:    gitinfo.Branch(cwd),
+	}
+	if cfg, err := config.Load(); err == nil {
+		m.logAcceptances = cfg.Ranking.LogAcceptances
 	}
 	// Enough to fill the opening frame; the rest follows once it is drawn.
 	// Nil is allowed so the view can be exercised without a database.
@@ -222,6 +229,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if c := m.selected(); c != nil {
 			m.Chosen = c.Command
+			m.recordAcceptance(*c)
 		}
 		return m, tea.Quit
 
@@ -341,6 +349,28 @@ func copyToClipboard(s string) {
 	}
 	defer tty.Close()
 	fmt.Fprintf(tty, "\x1b]52;c;%s\x07", base64.StdEncoding.EncodeToString([]byte(s)))
+}
+
+// recordAcceptance notes which candidate was taken and where it ranked.
+//
+// This is the only thing in the system that can say whether a change to the
+// ranking helped rather than merely changed it. It is written where the choice
+// happens, because a rank is only meaningful against the list it came from.
+//
+// Failures are swallowed: a picker that refused to hand over a command because
+// it could not write a statistic would be a bad trade.
+func (m *Model) recordAcceptance(c store.Command) {
+	if !m.logAcceptances || m.store == nil {
+		return
+	}
+	_ = m.store.RecordAcceptance(store.Acceptance{
+		At:      time.Now().UnixMilli(),
+		Query:   m.query,
+		Chosen:  c.Command,
+		Rank:    m.cursor,
+		Results: len(m.results),
+		Where:   m.where,
+	})
 }
 
 // Run shows the picker and returns the chosen command, or "" if cancelled.

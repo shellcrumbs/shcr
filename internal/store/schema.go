@@ -117,4 +117,32 @@ INSERT OR IGNORE INTO stats_meta (id, watermark) VALUES (1, 0);
 	`
 UPDATE stats_meta SET watermark = 0;
 `,
+	// 6: which candidate the picker's user actually took.
+	//
+	// Every weight in the ranking is a guess until something says whether a
+	// change made the list better or merely different. This is that something:
+	// the query, what was chosen, and where it ranked, which gives top-1
+	// accuracy and mean reciprocal rank over a person's real use.
+	//
+	// The context is recorded alongside so a weight change can be *replayed*
+	// rather than just counted — reconstructing what the candidates and their
+	// context were at that moment needs to know where the user was standing.
+	//
+	// It never leaves the machine: not an event, so it does not sync; not in
+	// the commands table, so it is not exported. `shcr rank forget` empties it
+	// and ranking.log_acceptances turns it off.
+	`
+CREATE TABLE IF NOT EXISTS picker_acceptances (
+    id         INTEGER PRIMARY KEY,
+    at         INTEGER NOT NULL,
+    query      TEXT    NOT NULL,
+    chosen     TEXT    NOT NULL,
+    rank       INTEGER NOT NULL,
+    results    INTEGER NOT NULL,
+    cwd        TEXT    NOT NULL DEFAULT '',
+    hostname   TEXT    NOT NULL DEFAULT '',
+    session_id TEXT    NOT NULL DEFAULT '',
+    branch     TEXT    NOT NULL DEFAULT ''
+);
+`,
 }
