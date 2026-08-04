@@ -90,8 +90,25 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 	if after == nil {
 		after = []store.Command{}
 	}
+	// How many times this command has run, and how those runs turned out. The
+	// table lists executions, so this is the one place the page can say that
+	// the line you are looking at is one of fifty.
+	usage := map[string]any{}
+	if st, ok, err := s.Store.CommandStatFor(c.Command); err == nil && ok {
+		usage = map[string]any{
+			"runs":        st.Runs,
+			"succeeded":   st.Succeeded,
+			"failed":      st.Failed,
+			"never_ran":   st.NeverRan,
+			"interrupted": st.Interrupted,
+			"unfinished":  st.Unfinished,
+			"summary":     st.Summary(),
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"command":        c,
+		"usage":          usage,
 		"session_before": before,
 		"session_after":  after,
 		// Output capture is not implemented, and saying so plainly is better

@@ -343,6 +343,38 @@ func TestSyncAvailabilityFollowsTheConfigurationNotTheWiring(t *testing.T) {
 	}
 }
 
+// The table lists executions, so without this a command run many times looks
+// exactly like one run once.
+func TestCommandDetailSaysHowOftenItHasRun(t *testing.T) {
+	srv, st := newTestServer(t)
+	at := int64(1_700_000_000_000)
+	for i := range 5 {
+		record(t, st, fmt.Sprintf("r%d", i), "npm run build", store.StatusCompleted, 0,
+			at+int64(i)*60_000)
+	}
+	if _, _, err := st.RefreshCommandStats(0); err != nil {
+		t.Fatal(err)
+	}
+
+	body := do(t, srv, "GET", withToken(srv, "/api/commands/r4"), "").Body.Bytes()
+	var got struct {
+		Usage struct {
+			Runs      int    `json:"runs"`
+			Succeeded int    `json:"succeeded"`
+			Summary   string `json:"summary"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Usage.Runs != 5 || got.Usage.Succeeded != 5 {
+		t.Errorf("usage = %+v, want 5 runs all succeeded", got.Usage)
+	}
+	if got.Usage.Summary != "ran 5× · 5 ok" {
+		t.Errorf("summary = %q", got.Usage.Summary)
+	}
+}
+
 func TestSyncEndpointReportsWhenUnavailable(t *testing.T) {
 	srv, _ := newTestServer(t)
 	if code := do(t, srv, "POST", withToken(srv, "/api/sync"), "").Code; code != http.StatusPreconditionFailed {

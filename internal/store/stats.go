@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
 
 	"github.com/shellcrumbs/shcr/internal/rank"
 )
@@ -233,4 +235,54 @@ func (s *Store) CommandStats(limit int) ([]CommandStat, error) {
 		out = append(out, st)
 	}
 	return out, rows.Err()
+}
+
+// CommandStatFor returns the cached statistics for one command's text.
+//
+// A deduplicated row stands for every execution of that command, so this is
+// what tells the reader whether they are looking at one run or fifty — and it
+// is what makes the ordering explainable rather than merely confident.
+func (s *Store) CommandStatFor(command string) (CommandStat, bool, error) {
+	var st CommandStat
+	err := s.db.QueryRow(`
+		SELECT command, runs, last_time, weight, weight_at, succeeded, failed,
+		       never_ran, interrupted, unfinished, imported_runs, last_failed_at
+		  FROM command_stats WHERE command = ?`, command).
+		Scan(&st.Command, &st.Runs, &st.LastTime, &st.Frecency.Weight, &st.Frecency.At,
+			&st.Succeeded, &st.Failed, &st.NeverRan, &st.Interrupted, &st.Unfinished,
+			&st.ImportedRuns, &st.LastFailedAt)
+	if err == sql.ErrNoRows {
+		return st, false, nil
+	}
+	return st, err == nil, err
+}
+
+// Summary describes a command's history in a few words: how many times it has
+// run and how those runs turned out. Empty when it has only ever run once,
+// because "ran 1 time" is not worth a line.
+func (st CommandStat) Summary() string {
+	if st.Runs <= 1 {
+		return ""
+	}
+	out := fmt.Sprintf("ran %d×", st.Runs)
+	var parts []string
+	if st.Succeeded > 0 {
+		parts = append(parts, fmt.Sprintf("%d ok", st.Succeeded))
+	}
+	if st.Failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", st.Failed))
+	}
+	if st.NeverRan > 0 {
+		parts = append(parts, fmt.Sprintf("%d not found", st.NeverRan))
+	}
+	if st.Interrupted > 0 {
+		parts = append(parts, fmt.Sprintf("%d interrupted", st.Interrupted))
+	}
+	if st.Unfinished > 0 {
+		parts = append(parts, fmt.Sprintf("%d unfinished", st.Unfinished))
+	}
+	if len(parts) > 0 {
+		out += " · " + strings.Join(parts, ", ")
+	}
+	return out
 }

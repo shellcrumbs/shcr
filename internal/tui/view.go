@@ -261,6 +261,15 @@ func (m *Model) detailMeta(c store.Command, pw int) []string {
 		out = append(out, " "+m.theme.Muted.Render(theme.Truncate("imported: no exit code recorded", pw)))
 	}
 
+	// What this row stands for. The list shows one entry per command, so a row
+	// backed by fifty executions is indistinguishable from one backed by a
+	// single run — and the count is part of why it is placed where it is.
+	if st, ok := m.statIndex[c.Command]; ok {
+		if summary := st.Summary(); summary != "" {
+			out = append(out, " "+m.theme.Muted.Render(theme.Truncate(summary, pw)))
+		}
+	}
+
 	rows := [][2]string{
 		{"host", c.Hostname},
 		{"dir", theme.ShortenPath(c.Cwd)},

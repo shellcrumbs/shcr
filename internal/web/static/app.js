@@ -397,6 +397,9 @@ async function openDetail(id) {
     ["Shell", c.shell || "—", true],
   ];
   if (c.exit_code != null) items.splice(6, 0, ["Exit code", String(c.exit_code), true, c.exit_code !== 0]);
+  // The table lists executions, so without this a command run fifty times
+  // looks exactly like one run once.
+  if (data.usage && data.usage.runs > 1) items.unshift(["Runs", data.usage.summary, false]);
 
   items.forEach(([k, v, mono, danger]) => {
     const item = el("div", "meta-item");

@@ -70,6 +70,7 @@ type Model struct {
 	// whole first-paint budget, and none of it is needed until something is
 	// typed.
 	stats     []store.CommandStat
+	statIndex map[string]store.CommandStat
 	statsFull bool
 	where     store.Where
 
@@ -125,7 +126,19 @@ func New(st *store.Store, th *theme.Theme, initialQuery string) *Model {
 	if st != nil {
 		m.stats, _ = st.CommandStats(refineCandidates)
 	}
+	m.indexStats()
 	return m
+}
+
+// indexStats makes the per-command history reachable by name, so the detail
+// pane can say how many executions the row in front of you stands for. A
+// deduplicated row otherwise looks identical whether it ran once or fifty
+// times — while that count is one of the things deciding the order.
+func (m *Model) indexStats() {
+	m.statIndex = make(map[string]store.CommandStat, len(m.stats))
+	for _, s := range m.stats {
+		m.statIndex[s.Command] = s
+	}
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -204,6 +217,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statsMsg:
 		if len(msg.stats) > len(m.stats) {
 			m.stats, m.statsFull = msg.stats, true
+			m.indexStats()
 			// Anything typed while this was loading was answered from a slice of
 			// the history; ask again now that all of it is here.
 			return m, m.runQuery()

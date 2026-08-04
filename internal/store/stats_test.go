@@ -264,3 +264,22 @@ func TestStatsRefreshAndReadAtScale(t *testing.T) {
 		t.Errorf("incremental refresh took %v, which is not incremental", incremental)
 	}
 }
+
+func TestSummaryDescribesWhatARowStandsFor(t *testing.T) {
+	for _, tc := range []struct {
+		st   CommandStat
+		want string
+	}{
+		// One execution is not a summary; the row already is the run.
+		{CommandStat{Runs: 1, Succeeded: 1}, ""},
+		{CommandStat{Runs: 8, Succeeded: 8}, "ran 8× · 8 ok"},
+		{CommandStat{Runs: 3, Succeeded: 2, Failed: 1}, "ran 3× · 2 ok, 1 failed"},
+		{CommandStat{Runs: 2, NeverRan: 2}, "ran 2× · 2 not found"},
+		{CommandStat{Runs: 4, Succeeded: 2, Interrupted: 2}, "ran 4× · 2 ok, 2 interrupted"},
+		{CommandStat{Runs: 2, Succeeded: 1, Unfinished: 1}, "ran 2× · 1 ok, 1 unfinished"},
+	} {
+		if got := tc.st.Summary(); got != tc.want {
+			t.Errorf("%+v -> %q, want %q", tc.st, got, tc.want)
+		}
+	}
+}
