@@ -171,6 +171,7 @@ func (m *Model) renderList(w int) []string {
 		out = append(out, m.theme.Row(m.results[i], theme.RowOpts{
 			Now:         now,
 			ReserveHost: reserveHost,
+			ShowAge:     true,
 			Width:       w,
 			Selected:    i == m.cursor,
 			Tokens:      tokens,

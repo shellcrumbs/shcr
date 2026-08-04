@@ -323,6 +323,63 @@ func TestSlotsHoldTheWidestValueTheyCanCarry(t *testing.T) {
 	}
 }
 
+func TestAgeStaysInItsColumn(t *testing.T) {
+	const now = int64(1_800_000_000_000)
+	for _, tc := range []struct {
+		ago  time.Duration
+		want string
+	}{
+		{10 * time.Second, "now"},
+		{90 * time.Second, "1m"},
+		{59 * time.Minute, "59m"},
+		{3 * time.Hour, "3h"},
+		{23 * time.Hour, "23h"},
+		{6 * 24 * time.Hour, "6d"},
+		{30 * 24 * time.Hour, "4w"},
+		{400 * 24 * time.Hour, "1y"},
+	} {
+		got := Age(now-tc.ago.Milliseconds(), now)
+		if got != tc.want {
+			t.Errorf("%s ago -> %q, want %q", tc.ago, got, tc.want)
+		}
+		if Width(got) > ageSlot-1 {
+			t.Errorf("%q is %d columns, too wide for the slot", got, Width(got))
+		}
+	}
+	// A peer whose clock runs ahead reports the future; a negative age would be
+	// worse than saying now.
+	if got := Age(now+60_000, now); got != "now" {
+		t.Errorf("a future timestamp rendered as %q", got)
+	}
+	if got := Age(0, now); got != "" {
+		t.Errorf("a missing timestamp rendered as %q", got)
+	}
+}
+
+// The age column must not eat into what it sits beside.
+func TestAgeDoesNotDisturbTheOtherColumns(t *testing.T) {
+	th := plainTheme(t)
+	const now = int64(1_800_000_000_000)
+	base := cmd(func(c *store.Command) { c.Command = "x"; c.Hostname = "build-server" })
+	base.StartTime = now - int64(3*time.Hour/time.Millisecond)
+
+	with := th.Row(base, RowOpts{Width: 100, LocalHost: "laptop", Now: now, ShowAge: true})
+	without := th.Row(base, RowOpts{Width: 100, LocalHost: "laptop", Now: now})
+	if Width(with) != 100 || Width(without) != 100 {
+		t.Fatalf("widths: with=%d without=%d, want 100", Width(with), Width(without))
+	}
+	if !strings.Contains(plain(with), "3h") {
+		t.Errorf("age missing: %q", plain(with))
+	}
+	if strings.Contains(plain(without), "3h") {
+		t.Errorf("age shown without ShowAge: %q", plain(without))
+	}
+	// The host column keeps its place; only the command gives up room.
+	if a, b := strings.Index(plain(with), "build-server"), strings.Index(plain(without), "build-server"); a >= b {
+		t.Errorf("host moved right (%d -> %d) instead of the command giving up room", b, a)
+	}
+}
+
 func TestStatusVocabularyIsShared(t *testing.T) {
 	for _, s := range []string{
 		store.StatusCompleted, store.StatusRunning, store.StatusFailed, store.StatusOrphaned,

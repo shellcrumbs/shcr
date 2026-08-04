@@ -74,6 +74,34 @@ func TailPath(p string, w int) string {
 	return "…" + strings.Join(cells[start:], "")
 }
 
+// Age is how long ago something started, in at most three columns, for a
+// column you read down rather than a phrase you read across. RelativeTime is
+// the one for prose.
+//
+// now is passed in rather than read from the clock so a row renders the same
+// way twice.
+func Age(ts, now int64) string {
+	if ts <= 0 {
+		return ""
+	}
+	d := time.Duration(now-ts) * time.Millisecond
+	switch {
+	// A peer whose clock is ahead of ours reports the future. "now" is a better
+	// answer than a negative number.
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d.Hours()/24/7))
+	}
+	return fmt.Sprintf("%dy", int(d.Hours()/24/365))
+}
+
 func RelativeTime(ms int64) string {
 	d := time.Since(time.UnixMilli(ms))
 	switch {

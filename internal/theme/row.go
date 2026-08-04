@@ -35,6 +35,10 @@ type RowOpts struct {
 	// use it. Without it the command text ends at a different column on every
 	// row, because the slot is as wide as that row's hostname.
 	ReserveHost bool
+	// ShowAge puts how long ago the command ran at the end of the row. The
+	// picker wants it — with no clock column, two similar commands are told
+	// apart by when they ran. `shcr list` already prints the time itself.
+	ShowAge bool
 }
 
 const (
@@ -43,6 +47,7 @@ const (
 	minCommandWidth = 16
 	// Fixed slots so durations and exit codes read as columns. Wide enough for
 	// the chip padding around "1h 30m" and "127".
+	ageSlot      = 4
 	hostSlot     = 12
 	durationSlot = 9
 	exitSlot     = 5
@@ -157,6 +162,13 @@ func (t *Theme) trailing(c store.Command, o RowOpts, level int) string {
 			exit = t.chipExit.Render(strconv.Itoa(*c.ExitCode))
 		}
 		parts = append(parts, padLeft(exit, exitSlot))
+
+		if o.ShowAge && o.Now > 0 {
+			// One column of the slot is margin: the trailing group sits flush
+			// against the frame, and a column of text touching the border reads
+			// as though it has been cut off.
+			parts = append(parts, padLeft(t.Muted.Render(Age(c.StartTime, o.Now)), ageSlot-1)+" ")
+		}
 	} else if c.ExitCode != nil && *c.ExitCode != 0 {
 		// Last resort: no room for columns, but a failure still says which one.
 		parts = append(parts, t.chipExit.Render(strconv.Itoa(*c.ExitCode)))
