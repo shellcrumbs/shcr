@@ -1,0 +1,95 @@
+version: 2
+
+project_name: shcr
+
+before:
+  hooks:
+    # download, not tidy: a release must not be able to edit go.mod on its way out.
+    - go mod download
+
+builds:
+  - id: shcr
+    main: ./cmd/shcr
+    binary: shcr
+    # Pure Go, which is what the modernc SQLite driver buys: one static binary
+    # per architecture, cross-compiled from anywhere, no toolchain on the target.
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    # Linux only, deliberately. The daemon is managed by systemd and orphan
+    # detection reasons about the process table; shipping a macOS binary would
+    # be shipping something whose service story does not exist.
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # Derived from the commit rather than the clock, so the same tag rebuilds
+    # to the same bytes.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - CONTRIBUTING.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+nfpms:
+  - id: packages
+    package_name: shcr
+    vendor: shellcrumbs
+    homepage: https://github.com/shellcrumbs/shcr
+    maintainer: Tobias Werth <tobias.werth@gmail.com>
+    description: |-
+      Shell history that records when a command started, not only that it ran.
+      Writes a start event before a command runs and an end event after, so it
+      can show what is running now, what failed, and what died with its terminal.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/shcr/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/shcr/README.md
+
+changelog:
+  # No `sort:` — that orders entries alphabetically by subject, which for the
+  # first release listed "Add CI" before "Add the event log". Empty means git
+  # order, which is the order things happened.
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  draft: false
+  footer: |
+    ## Install
+
+    ```sh
+    tar xzf shcr_{{ .Version }}_linux_amd64.tar.gz
+    install -m755 shcr ~/.local/bin/
+    echo 'eval "$(shcr init bash)"' >> ~/.bashrc   # or: shcr init zsh
+    shcr service install
+    ```
+
+    Or with a Go toolchain: `go install github.com/shellcrumbs/shcr/cmd/shcr@{{ .Tag }}`
+
+    Verify a download against `checksums.txt`:
+
+    ```sh
+    sha256sum -c checksums.txt --ignore-missing
+    ```
