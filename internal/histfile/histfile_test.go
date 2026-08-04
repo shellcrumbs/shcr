@@ -213,6 +213,54 @@ func TestMixedDatedAndUndatedBashKeepsFileOrder(t *testing.T) {
 	}
 }
 
+// EXTENDED_HISTORY is commonly switched on partway through a history's life —
+// oh-my-zsh sets it — which leaves a file whose older half has no
+// `: <start>:<elapsed>;` prefix. The file is still recognised as zsh from the
+// entries that do have one, so skipping the rest silently loses everything
+// older than the day the option went on.
+func TestZshHistoryFromBeforeExtendedHistoryIsKept(t *testing.T) {
+	p := write(t, ".zsh_history", []byte(
+		"git status\n"+
+			"make build\n"+
+			": 1711202296:0;npm run dev\n"+
+			": 1711202354:3;go test ./...\n"))
+	mod := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(p, mod, mod); err != nil {
+		t.Fatal(err)
+	}
+	src, err := Parse(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.Kind != Zsh {
+		t.Fatalf("kind = %s, want zsh", src.Kind)
+	}
+	if len(src.Entries) != 4 {
+		t.Fatalf("got %d entries, want 4: %+v", len(src.Entries), src.Entries)
+	}
+	for i, want := range []string{"git status", "make build", "npm run dev", "go test ./..."} {
+		if src.Entries[i].Command != want {
+			t.Errorf("entry %d = %q, want %q", i, src.Entries[i].Command, want)
+		}
+	}
+	// The recovered ones carry no real time, and must not claim one.
+	for i := range 2 {
+		if !src.Entries[i].Approximate {
+			t.Errorf("entry %d should be flagged approximate", i)
+		}
+	}
+	if src.Entries[2].Approximate || src.Entries[2].StartTime != 1711202296000 {
+		t.Errorf("a dated entry lost its timestamp: %+v", src.Entries[2])
+	}
+	// File order is history order, whichever half an entry came from.
+	for i := 1; i < len(src.Entries); i++ {
+		if src.Entries[i].StartTime <= src.Entries[i-1].StartTime {
+			t.Errorf("entry %d (%s) is not after entry %d (%s)",
+				i, src.Entries[i].Command, i-1, src.Entries[i-1].Command)
+		}
+	}
+}
+
 func TestBlankAndMalformedLinesAreIgnored(t *testing.T) {
 	src := parse(t, "h", []byte("\n\n   \nls\n\n"))
 	if len(src.Entries) != 1 || src.Entries[0].Command != "ls" {

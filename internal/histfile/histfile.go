@@ -98,7 +98,7 @@ func Parse(path string) (*Source, error) {
 	src := &Source{Path: path, Kind: kind}
 	switch kind {
 	case Zsh:
-		src.Entries = parseZsh(raw)
+		src.Entries = parseZsh(raw, info.ModTime())
 	case Fish:
 		src.Entries = parseFish(raw)
 	default:
@@ -162,15 +162,30 @@ func allDigits(b []byte) bool {
 	return true
 }
 
-func parseZsh(raw []byte) []Entry {
+func parseZsh(raw []byte, modTime time.Time) []Entry {
 	var out []Entry
 	lines := bytes.Split(raw, []byte("\n"))
 	for i := 0; i < len(lines); i++ {
-		parts := zshEntry(lines[i])
-		if parts == nil {
+		if len(bytes.TrimSpace(lines[i])) == 0 {
 			continue
 		}
-		cmd := append([]byte(nil), parts[2]...)
+
+		var cmd []byte
+		var started, elapsed int64
+		if parts := zshEntry(lines[i]); parts != nil {
+			cmd = append([]byte(nil), parts[2]...)
+			started, _ = strconv.ParseInt(string(parts[0]), 10, 64)
+			elapsed, _ = strconv.ParseInt(string(parts[1]), 10, 64)
+		} else {
+			// A line with no `: <start>:<elapsed>;` prefix is a command written
+			// before EXTENDED_HISTORY was switched on, which plenty of people do
+			// partway through a history's life. Skipping those lines is not a
+			// no-op: the file is recognised as zsh from the entries that do have
+			// the prefix, so everything older than the switch disappears with no
+			// sign that it was there.
+			cmd = append([]byte(nil), lines[i]...)
+		}
+
 		// A trailing backslash continues the command onto the next line. This is
 		// how zsh stores anything multi-line, and 100-odd of them in a real
 		// history is normal.
@@ -180,19 +195,22 @@ func parseZsh(raw []byte) []Entry {
 			cmd = append(cmd, '\n')
 			cmd = append(cmd, lines[i]...)
 		}
-		started, _ := strconv.ParseInt(string(parts[0]), 10, 64)
-		elapsed, _ := strconv.ParseInt(string(parts[1]), 10, 64)
 
 		text := string(unmetafy(cmd))
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		out = append(out, Entry{
-			Command:    text,
-			StartTime:  started * 1000,
-			DurationMS: elapsed * 1000,
-		})
+		e := Entry{Command: text}
+		if started > 0 {
+			e.StartTime = started * 1000
+			e.DurationMS = elapsed * 1000
+		}
+		out = append(out, e)
 	}
+	// The undated entries are the ones from before the switch, so they are the
+	// oldest; approximateUndated places each run before the dated entry that
+	// follows it rather than against the file's mtime.
+	approximateUndated(out, modTime)
 	return out
 }
 
