@@ -74,6 +74,21 @@ func TailPath(p string, w int) string {
 	return "…" + strings.Join(cells[start:], "")
 }
 
+// Timestamp is when something happened, to the minute. The year is included
+// only when it is not the current one: on a history that mostly covers the last
+// few weeks, printing it on every line spends four columns saying the same
+// thing.
+func Timestamp(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	t := time.UnixMilli(ms)
+	if t.Year() != time.Now().Year() {
+		return t.Format("Mon 2 Jan 2006, 15:04")
+	}
+	return t.Format("Mon 2 Jan, 15:04")
+}
+
 // Age is how long ago something started, in at most three columns, for a
 // column you read down rather than a phrase you read across. RelativeTime is
 // the one for prose.

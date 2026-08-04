@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shellcrumbs/shcr/internal/store"
 	"github.com/shellcrumbs/shcr/internal/theme"
 )
 
@@ -203,17 +204,63 @@ func (m *Model) renderDetail(w int) []string {
 	if c == nil {
 		return nil
 	}
-	out := make([]string, 0, m.bodyHeight())
 	pw := w - 2
+	budget := m.bodyHeight()
 
-	for _, line := range theme.Wrap(c.Command, pw, 4) {
-		out = append(out, " "+line)
+	// Everything except the command is measured first, because the command is
+	// what the pane is for: it gets whatever is left rather than a fixed four
+	// lines with the rest dropped on the floor.
+	meta := m.detailMeta(*c, pw)
+	session := m.detailSession(pw)
+	room := budget - len(meta) - len(session)
+	if len(session) > 0 {
+		room-- // the blank line above the session block
 	}
-	out = append(out, "")
 
-	// Status, duration and exit code all live in the selected row's chips a few
-	// columns to the left, so repeating them here would be noise. What is left
-	// is the context a chip has no room for.
+	out := make([]string, 0, budget)
+	lines := theme.Wrap(c.Command, pw, 0)
+	if room < 1 {
+		room = 1
+	}
+	if len(lines) > room {
+		// Say so, rather than stopping mid-word and looking complete. Truncate
+		// adds its own ellipsis when it shortens, so only add one when it did
+		// not — two in a row reads as a typo.
+		lines = lines[:room]
+		last := theme.Truncate(lines[room-1], pw-1)
+		if !strings.HasSuffix(last, "…") {
+			last += "…"
+		}
+		lines[room-1] = last
+	}
+	for _, line := range lines {
+		out = append(out, " "+m.theme.Highlight(line, theme.Tokens(m.query)))
+	}
+	out = append(out, meta...)
+	if len(session) > 0 && len(out)+len(session) < budget {
+		out = append(out, "")
+		out = append(out, session...)
+	}
+	return out
+}
+
+// detailMeta is the context a chip has no room for. Status, duration and exit
+// stay in the selected row, a few columns to the left.
+func (m *Model) detailMeta(c store.Command, pw int) []string {
+	out := []string{""}
+
+	// Why a row has no duration and no exit code. The glyph in the list says
+	// which state it is; this says what that state means for the result, which
+	// is the question the picker exists to answer.
+	switch {
+	case c.Status == store.StatusOrphaned:
+		out = append(out, " "+m.theme.Muted.Render(theme.Truncate("no result: the shell exited first", pw)))
+	case c.Status == store.StatusRunning:
+		out = append(out, " "+m.theme.Muted.Render("still running"))
+	case c.Imported:
+		out = append(out, " "+m.theme.Muted.Render(theme.Truncate("imported: no exit code recorded", pw)))
+	}
+
 	rows := [][2]string{
 		{"host", c.Hostname},
 		{"dir", theme.ShortenPath(c.Cwd)},
@@ -223,34 +270,43 @@ func (m *Model) renderDetail(w int) []string {
 	if c.GitBranch != nil && *c.GitBranch != "" {
 		rows = append(rows, [2]string{"branch", *c.GitBranch})
 	}
-	rows = append(rows, [2]string{"started", theme.RelativeTime(c.StartTime)})
+	// The absolute time, because the row already carries how long ago it was.
+	// Two ways of saying "5 minutes" would leave neither saying when.
+	rows = append(rows, [2]string{"started", theme.Timestamp(c.StartTime)})
 	for _, r := range rows {
 		out = append(out, " "+m.theme.Label.Render(theme.Pad(r[0], 9))+theme.Truncate(r[1], pw-10))
-	}
-
-	if len(m.neighbors) > 0 && len(out)+3 < m.bodyHeight() {
-		out = append(out, "")
-		out = append(out, " "+m.theme.Frame.Render("┌ ")+m.theme.Muted.Render("same session")+" "+
-			m.theme.Frame.Render(strings.Repeat("─", max(pw-16, 0))+"┐"))
-		// Newest-first from the query; show them in the order they ran.
-		for i := len(m.neighbors) - 1; i >= 0; i-- {
-			if len(out) >= m.bodyHeight()-1 {
-				break
-			}
-			// pw-3 keeps these rows flush with the header and footer, which are
-			// one column wider than the naive content width.
-			t := theme.Truncate(theme.FirstLine(m.neighbors[i].Command), pw-3)
-			out = append(out, " "+m.theme.Frame.Render("│ ")+
-				m.theme.Muted.Render(theme.Pad(t, pw-3))+m.theme.Frame.Render("│"))
-		}
-		if len(out) < m.bodyHeight() {
-			out = append(out, " "+m.theme.Frame.Render("└"+strings.Repeat("─", pw-2)+"┘"))
-		}
 	}
 	return out
 }
 
-// ---------------------------------------------------------------- helpers
+// detailSession renders the shell session around the selected command as one
+// timeline with the command marked in place. A list labelled only "same
+// session" left it unsaid whether those commands came before or after; showing
+// the selected one among them answers that without a word.
+func (m *Model) detailSession(pw int) []string {
+	c := m.selected()
+	if c == nil || (len(m.before) == 0 && len(m.after) == 0) {
+		return nil
+	}
+	out := []string{" " + m.theme.Label.Render("session")}
+	line := func(text string, current bool) string {
+		t := theme.Truncate(theme.FirstLine(text), pw-3)
+		if current {
+			return " " + m.theme.Accent.Render("▌") + " " + m.theme.Accent.Render(t)
+		}
+		return "   " + m.theme.Muted.Render(t)
+	}
+	// before is newest-first from the query; read it backwards so the whole
+	// block runs in the order the commands were typed.
+	for i := len(m.before) - 1; i >= 0; i-- {
+		out = append(out, line(m.before[i].Command, false))
+	}
+	out = append(out, line(c.Command, true))
+	for _, n := range m.after {
+		out = append(out, line(n.Command, false))
+	}
+	return out
+}
 
 func at(lines []string, i int) string {
 	if i < len(lines) {

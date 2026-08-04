@@ -29,7 +29,9 @@ const minSplitWidth = 100
 const maxDetailWidth = 36
 
 const (
-	sessionContextLines = 3
+	// Five each side of the selected command. Enough to recognise what you were
+	// doing at the time, without the pane becoming a second history list.
+	sessionContextLines = 5
 	queryLimit          = 200
 )
 
@@ -51,7 +53,10 @@ type Model struct {
 	// belongs to a query the user has already typed past.
 	seq int
 
-	neighbors    []store.Command
+	// The commands either side of the selected one in its shell session, which
+	// together with the selected one read as a timeline.
+	before       []store.Command
+	after        []store.Command
 	neighborsFor string
 
 	width, height int
@@ -70,8 +75,8 @@ type resultsMsg struct {
 }
 
 type neighborsMsg struct {
-	forID string
-	cmds  []store.Command
+	forID         string
+	before, after []store.Command
 }
 
 type clearCopiedMsg struct{}
@@ -112,11 +117,15 @@ func (m *Model) runQuery() tea.Cmd {
 func (m *Model) loadNeighbors(c store.Command) tea.Cmd {
 	st := m.store
 	return func() tea.Msg {
-		cmds, err := st.SessionContext(c.SessionID, c.StartTime, sessionContextLines)
+		before, err := st.SessionContext(c.SessionID, c.StartTime, sessionContextLines)
 		if err != nil {
 			return neighborsMsg{forID: c.ID}
 		}
-		return neighborsMsg{forID: c.ID, cmds: cmds}
+		after, err := st.SessionAfter(c.SessionID, c.StartTime, sessionContextLines)
+		if err != nil {
+			return neighborsMsg{forID: c.ID, before: before}
+		}
+		return neighborsMsg{forID: c.ID, before: before, after: after}
 	}
 }
 
@@ -140,7 +149,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case neighborsMsg:
 		if msg.forID == m.selectedID() {
-			m.neighbors = msg.cmds
+			m.before, m.after = msg.before, msg.after
 			m.neighborsFor = msg.forID
 		}
 		return m, nil
@@ -263,13 +272,13 @@ func (m *Model) selectedID() string {
 func (m *Model) neighborCmd() tea.Cmd {
 	c := m.selected()
 	if c == nil {
-		m.neighbors, m.neighborsFor = nil, ""
+		m.before, m.after, m.neighborsFor = nil, nil, ""
 		return nil
 	}
 	if m.neighborsFor == c.ID {
 		return nil
 	}
-	m.neighbors = nil
+	m.before, m.after = nil, nil
 	return m.loadNeighbors(*c)
 }
 
