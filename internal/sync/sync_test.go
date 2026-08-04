@@ -444,6 +444,59 @@ func TestConcurrentSyncCyclesDoNotLoseABatch(t *testing.T) {
 	}
 }
 
+// The complement of not advancing past a bad batch: the batches read before it
+// must not be forgotten either. Dropping that progress costs nothing in
+// correctness, since merging is idempotent, but it means every later sync
+// re-lists from zero and re-fetches and re-decrypts the good batches again, for
+// as long as the bad one stays unreadable.
+func TestProgressBeforeAnUnreadableBatchIsKept(t *testing.T) {
+	bucket, root := newBucket(t)
+	key, _ := crypto.GenerateKey()
+	a := newDevice(t, "dev-a", "a", bucket, key)
+	b := newDevice(t, "dev-b", "b", bucket, key)
+
+	for i, text := range []string{"first", "second", "third"} {
+		a.run(t, text, 0, int64(1000+i*1000))
+		a.sync(t)
+	}
+	keys, _ := bucket.List(context.Background(), batchPrefix("dev-a"), "")
+	if len(keys) != 3 {
+		t.Fatalf("expected 3 batches, got %d", len(keys))
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(keys[2])), []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, err := b.engine.PullOnce(context.Background())
+	if err == nil {
+		t.Fatal("the unreadable batch should be reported")
+	}
+	if applied == 0 {
+		t.Fatal("setup: nothing was applied before the bad batch")
+	}
+
+	cur, err := b.store.Cursor("dev-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.LastBatchKey != keys[1] {
+		t.Errorf("cursor = %q, want the last good batch %q", cur.LastBatchKey, keys[1])
+	}
+
+	// A second attempt must have nothing left to redo before it reaches the
+	// bad batch again.
+	again, err := b.engine.PullOnce(context.Background())
+	if err == nil {
+		t.Error("the batch is still unreadable, so it should still be reported")
+	}
+	if again != 0 {
+		t.Errorf("re-applied %d events that were already stored", again)
+	}
+	if got := len(b.commands(t)); got != 2 {
+		t.Errorf("b holds %d commands, want the 2 from the readable batches", got)
+	}
+}
+
 func TestCursorDoesNotAdvancePastAnUnreadableBatch(t *testing.T) {
 	bucket, root := newBucket(t)
 	key, _ := crypto.GenerateKey()

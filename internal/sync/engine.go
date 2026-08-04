@@ -369,6 +369,7 @@ func (e *Engine) pullPeer(ctx context.Context, peer string) (int, error) {
 	}
 
 	applied := 0
+	var failed error
 	for _, key := range keys {
 		// Defensive: a backend that ignored the bound must not make us reapply
 		// and re-advance over batches already consumed.
@@ -380,19 +381,29 @@ func (e *Engine) pullPeer(ctx context.Context, peer string) (int, error) {
 			// Stop at the first unreadable batch rather than skipping past it:
 			// advancing the cursor over a batch we could not read would lose
 			// those events permanently.
-			return applied, fmt.Errorf("batch %s: %w", key, err)
+			failed = fmt.Errorf("batch %s: %w", key, err)
+			break
 		}
 		applied += n
 		cursor.LastBatchKey = key
 	}
 
 	cursor.PeerDeviceID = peer
-	cursor.LastSyncedAt = time.Now().UnixMilli()
 	if m.HostnameHint != "" {
 		cursor.HostnameHint = m.HostnameHint
 	}
+	// Only a clean pass counts as having synced this peer; the cursor itself is
+	// saved either way. Keeping the progress made before a bad batch is what
+	// stops every later sync from re-listing, re-fetching and re-decrypting the
+	// batches that were fine, for as long as the bad one stays unreadable.
+	if failed == nil {
+		cursor.LastSyncedAt = time.Now().UnixMilli()
+	}
 	if err := e.Store.SaveCursor(cursor); err != nil {
 		return applied, err
+	}
+	if failed != nil {
+		return applied, failed
 	}
 	if applied > 0 {
 		e.logf("pulled %d event(s) from %s", applied, peer)
