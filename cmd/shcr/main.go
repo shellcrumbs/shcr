@@ -5,9 +5,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,6 +26,7 @@ import (
 	"github.com/shellcrumbs/shcr/internal/export"
 	"github.com/shellcrumbs/shcr/internal/gitinfo"
 	"github.com/shellcrumbs/shcr/internal/histfile"
+	"github.com/shellcrumbs/shcr/internal/histimport"
 	"github.com/shellcrumbs/shcr/internal/ipc"
 	"github.com/shellcrumbs/shcr/internal/paths"
 	"github.com/shellcrumbs/shcr/internal/redact"
@@ -622,7 +619,7 @@ func cmdImport(args []string) error {
 	host, _ := os.Hostname()
 	red := redactor()
 
-	var totalNew, totalSeen, totalRedacted, totalSkipped int
+	var total histimport.Result
 	for _, p := range files {
 		src, err := histfile.Parse(p)
 		if err != nil {
@@ -630,109 +627,35 @@ func cmdImport(args []string) error {
 			continue
 		}
 
-		var added, existing, redacted, skipped int
-		for _, e := range src.Entries {
-			text, action, _ := red.Apply(e.Command)
-			if action == redact.ActionSkip {
-				skipped++
-				continue
-			}
-			if action == redact.ActionRedact {
-				redacted++
-			}
-			ev := importEvent(deviceID, host, string(src.Kind), src.Path, text, e)
-			if *dryRun {
-				// An entry's identity is derived from its content, so whether it is
-				// already here is knowable without writing anything. Counting every
-				// entry as new made the one number this flag exists to produce wrong
-				// for the common case of re-importing a file.
-				c, err := st.CommandByID(ev.CommandID)
-				if err != nil {
-					return fmt.Errorf("%s: %w", p, err)
-				}
-				if c == nil {
-					added++
-				} else {
-					existing++
-				}
-				continue
-			}
-			inserted, err := st.AppendEvent(ev)
-			if err != nil {
-				return fmt.Errorf("%s: %w", p, err)
-			}
-			if inserted {
-				added++
-			} else {
-				existing++
-			}
+		r, err := histimport.File(st, src, histimport.Options{
+			DeviceID: deviceID, Hostname: host, Redactor: red, DryRun: *dryRun,
+		})
+		if err != nil {
+			return err
 		}
 
 		fmt.Printf("%s %s\n", th.Label.Render(fmt.Sprintf("%-6s", string(src.Kind))), p)
-		detail := fmt.Sprintf("%d new", added)
-		if existing > 0 {
-			detail += fmt.Sprintf(", %d already present", existing)
-		}
-		if redacted > 0 {
-			detail += fmt.Sprintf(", %d with secrets redacted", redacted)
-		}
-		if skipped > 0 {
-			detail += fmt.Sprintf(", %d skipped entirely", skipped)
-		}
-		fmt.Printf("       %s\n", th.Muted.Render(detail))
-
-		totalNew += added
-		totalSeen += existing
-		totalRedacted += redacted
-		totalSkipped += skipped
+		fmt.Printf("       %s\n", th.Muted.Render(r.Detail()))
+		total.Add(r)
 	}
 
 	fmt.Println()
 	if *dryRun {
-		msg := fmt.Sprintf("dry run: %d command(s) would be imported", totalNew)
-		if totalSeen > 0 {
-			msg += fmt.Sprintf("; %d already here", totalSeen)
+		msg := fmt.Sprintf("dry run: %d command(s) would be imported", total.New)
+		if total.Existing > 0 {
+			msg += fmt.Sprintf("; %d already here", total.Existing)
 		}
 		fmt.Println(th.Muted.Render(msg))
 		return nil
 	}
-	fmt.Printf("imported %d command(s)", totalNew)
-	if totalSeen > 0 {
-		fmt.Printf("; %d were already here", totalSeen)
+	fmt.Printf("imported %d command(s)", total.New)
+	if total.Existing > 0 {
+		fmt.Printf("; %d were already here", total.Existing)
 	}
 	fmt.Println()
 	fmt.Println(th.Muted.Render(
 		"Imported commands carry no exit code, and a time only where the shell recorded one."))
 	return nil
-}
-
-// importEvent builds an event whose identity is derived from its content, so
-// importing the same file twice adds nothing the second time. A history file is
-// re-read, appended to and trimmed constantly; anything keyed on position would
-// duplicate every entry the first time the file rolled over.
-func importEvent(deviceID, host, shell, source, text string, e histfile.Entry) event.Event {
-	sum := sha256.Sum256([]byte(strings.Join([]string{
-		"shcr-import-v1", shell, strconv.FormatInt(e.StartTime, 10), text,
-	}, "\x00")))
-	id := "import-" + hex.EncodeToString(sum[:12])
-
-	payload, _ := json.Marshal(event.ImportPayload{
-		Command:         text,
-		Hostname:        host,
-		Shell:           shell,
-		StartTime:       e.StartTime,
-		ApproximateTime: e.Approximate,
-		DurationMS:      e.DurationMS,
-		Source:          filepath.Base(source),
-	})
-	return event.Event{
-		EventID:   id,
-		CommandID: id,
-		DeviceID:  deviceID,
-		Type:      event.TypeImport,
-		Payload:   payload,
-		CreatedAt: e.StartTime,
-	}
 }
 
 // ---------------------------------------------------------------- export
