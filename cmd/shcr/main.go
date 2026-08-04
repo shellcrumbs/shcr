@@ -9,6 +9,7 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -756,13 +757,27 @@ func cmdExport(args []string) error {
 
 	w := io.Writer(os.Stdout)
 	if *out != "" {
-		// This file is the whole history in plain text, so it is created with the
-		// same permissions as the database it came from.
-		f, err := os.OpenFile(*out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		// This file is the whole history in plain text, so it gets the same
+		// permissions as the database it came from.
+		//
+		// O_NOFOLLOW because writing through a symlink puts the history wherever
+		// whoever created that link chose, which on a shared machine with a
+		// predictable path is somebody else's decision to make.
+		f, err := os.OpenFile(*out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 		if err != nil {
+			if errors.Is(err, syscall.ELOOP) {
+				return fmt.Errorf("%s is a symlink; refusing to write your history through it", *out)
+			}
 			return err
 		}
 		defer f.Close()
+		// The mode in OpenFile applies only when it creates the file. Exporting
+		// over one that already existed — the same filename twice, or a file
+		// something else made — otherwise left the whole history at whatever
+		// permissions it already had.
+		if err := f.Chmod(0o600); err != nil {
+			return fmt.Errorf("securing %s: %w", *out, err)
+		}
 		w = f
 	}
 	buf := bufio.NewWriterSize(w, 128*1024)
