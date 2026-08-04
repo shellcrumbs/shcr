@@ -15,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/shellcrumbs/shcr/internal/gitinfo"
 	"github.com/shellcrumbs/shcr/internal/ipc"
 	"github.com/shellcrumbs/shcr/internal/store"
 	"github.com/shellcrumbs/shcr/internal/theme"
@@ -32,7 +33,10 @@ const (
 	// Five each side of the selected command. Enough to recognise what you were
 	// doing at the time, without the pane becoming a second history list.
 	sessionContextLines = 5
-	queryLimit          = 200
+	// statsLimit bounds how much history the picker will consider matching
+	// against, which is what keeps a keystroke's cost independent of how long
+	// the history has been accumulating.
+	statsLimit = 20000
 )
 
 var statusCycle = []string{"", store.StatusRunning, store.StatusFailed, store.StatusOrphaned}
@@ -59,6 +63,15 @@ type Model struct {
 	after        []store.Command
 	neighborsFor string
 
+	// The ranking cache, and where the user is standing. stats arrives in two
+	// stages: a first slice big enough to draw the opening frame, then the rest
+	// once it is on screen. Reading twenty thousand of them costs more than the
+	// whole first-paint budget, and none of it is needed until something is
+	// typed.
+	stats     []store.CommandStat
+	statsFull bool
+	where     store.Where
+
 	width, height int
 	copied        bool
 	err           error
@@ -81,33 +94,60 @@ type neighborsMsg struct {
 
 type clearCopiedMsg struct{}
 
+// statsMsg carries the rest of the ranking cache, once the picker is drawn.
+type statsMsg struct {
+	stats []store.CommandStat
+}
+
 func New(st *store.Store, th *theme.Theme, initialQuery string) *Model {
 	host, _ := os.Hostname()
-	return &Model{
+	m := &Model{
 		store: st, theme: th, localHost: host,
 		query: initialQuery, width: 80, height: 24,
 	}
+	cwd, _ := os.Getwd()
+	m.where = store.Where{
+		Cwd:       cwd,
+		Repo:      gitinfo.Root(cwd),
+		Hostname:  host,
+		SessionID: os.Getenv("SHCR_SESSION_ID"),
+		Branch:    gitinfo.Branch(cwd),
+	}
+	// Enough to fill the opening frame; the rest follows once it is drawn.
+	// Nil is allowed so the view can be exercised without a database.
+	if st != nil {
+		m.stats, _ = st.CommandStats(refineCandidates)
+	}
+	return m
 }
 
 func (m *Model) Init() tea.Cmd {
-	return m.runQuery()
+	return tea.Batch(m.runQuery(), m.loadStats())
 }
 
-func (m *Model) filter() store.Filter {
-	return store.Filter{
-		Text:   m.query,
-		Status: statusCycle[m.statusIdx],
-		Limit:  queryLimit,
+// loadStats fetches the whole ranking cache after the first frame is drawn.
+func (m *Model) loadStats() tea.Cmd {
+	st := m.store
+	return func() tea.Msg {
+		full, err := st.CommandStats(statsLimit)
+		if err != nil {
+			return statsMsg{}
+		}
+		return statsMsg{stats: full}
 	}
 }
 
 func (m *Model) runQuery() tea.Cmd {
 	m.seq++
 	seq := m.seq
-	f := m.filter()
 	st := m.store
+	stats := m.stats
+	where := m.where
+	query := m.query
+	status := statusCycle[m.statusIdx]
+	now := time.Now().UnixMilli()
 	return func() tea.Msg {
-		cmds, err := st.QueryCommands(f)
+		cmds, err := rankedResults(st, stats, where, query, status, now)
 		return resultsMsg{seq: seq, cmds: cmds, err: err}
 	}
 }
@@ -152,6 +192,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.before, m.after = msg.before, msg.after
 			m.neighborsFor = msg.forID
 		}
+		return m, nil
+
+	case statsMsg:
+		if len(msg.stats) > len(m.stats) {
+			m.stats, m.statsFull = msg.stats, true
+			// Anything typed while this was loading was answered from a slice of
+			// the history; ask again now that all of it is here.
+			return m, m.runQuery()
+		}
+		m.statsFull = true
 		return m, nil
 
 	case clearCopiedMsg:

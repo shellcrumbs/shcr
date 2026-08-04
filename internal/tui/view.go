@@ -77,13 +77,13 @@ func (m *Model) View() string {
 func (m *Model) renderTop(inner int) string {
 	title := " shellcrumbs "
 	// How many rows matched, but only while filtering: unfiltered the list is
-	// capped at queryLimit, so a count would describe the page and not the
-	// history.
+	// capped at refineCandidates, so a count would describe the page and not
+	// the history.
 	count := ""
 	if m.query != "" || statusCycle[m.statusIdx] != "" {
 		switch n := len(m.results); {
-		case n >= queryLimit:
-			count = m.theme.Muted.Render(fmt.Sprintf("%d+ matches ", queryLimit))
+		case n >= refineCandidates:
+			count = m.theme.Muted.Render(fmt.Sprintf("%d+ matches ", refineCandidates))
 		case n == 1:
 			count = m.theme.Muted.Render("1 match ")
 		default:

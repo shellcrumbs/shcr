@@ -964,6 +964,18 @@ func cmdTUI(args []string) error {
 	}
 	defer st.Close()
 
+	// Catch up the ranking cache before drawing. The daemon keeps it warm, so
+	// this is normally the handful of commands run since its last pass and
+	// costs well under a millisecond — but the picker must not be the one place
+	// that cannot see what you just ran, and it has to work with no daemon at
+	// all. A failure here is not worth refusing to open over: stale ranking is
+	// a worse list, not a broken one.
+	if from, err := st.StatsWatermark(); err == nil {
+		if _, _, err := st.RefreshCommandStats(from); err != nil {
+			fmt.Fprintf(os.Stderr, "shcr: ranking cache: %v\n", err)
+		}
+	}
+
 	chosen, err := tui.Run(st, *query)
 	if err != nil {
 		return err

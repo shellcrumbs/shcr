@@ -33,6 +33,19 @@ func Branch(dir string) string {
 	return ""
 }
 
+// Root is the working tree a directory belongs to, or "" if it is not in one.
+//
+// Ranking uses it for the difference between "you ran this here" and "you ran
+// this in this project": exact-directory matching is too strict for real work,
+// where you are three levels down from where you last ran the build.
+func Root(dir string) string {
+	gitDir := findGitDir(dir)
+	if gitDir == "" {
+		return ""
+	}
+	return filepath.Dir(gitDir)
+}
+
 func findGitDir(dir string) string {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
