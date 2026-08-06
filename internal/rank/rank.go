@@ -64,8 +64,20 @@ func MatchCommand(command string, tokens []string) (Match, bool) {
 	if len(tokens) == 0 {
 		return Match{Tier: TierPrefix, Score: 1}, true
 	}
-	text := []rune(strings.ToLower(command))
-	starts := wordStarts(text)
+	// Boundaries come from the original text and matching from the folded copy.
+	// Folding first made the camelCase arm of wordStarts unreachable — nothing
+	// is upper case after ToLower — so a hump silently stopped being a word
+	// start and `build` matched npmRunBuild only mid-word.
+	//
+	// Folded rune by rune rather than with strings.ToLower, because that can
+	// change how many runes a string has (İ folds to two) and the two slices are
+	// indexed against each other.
+	orig := []rune(command)
+	text := make([]rune, len(orig))
+	for i, r := range orig {
+		text[i] = unicode.ToLower(r)
+	}
+	starts := wordStarts(orig)
 
 	worst := TierPrefix
 	total := 0.0
@@ -198,8 +210,14 @@ func wordStarts(text []rune) []bool {
 			out[i] = true
 		case isSeparator(text[i-1]):
 			out[i] = !isSeparator(r)
-		case unicode.IsUpper(r) && unicode.IsLower(text[i-1]):
-			out[i] = true
+		case unicode.IsUpper(r):
+			// A capital starts a word unless it is in the middle of a run of
+			// them: npmRunBuild and awsS3Sync both begin a word at a capital
+			// that follows something which is not one. A run is a single word —
+			// NPM, HTTP — right up to its last capital, which starts the next
+			// word when a lower-case letter follows it: parseHTTPResponse.
+			out[i] = !unicode.IsUpper(text[i-1]) ||
+				(i+1 < len(text) && unicode.IsLower(text[i+1]))
 		}
 	}
 	return out
