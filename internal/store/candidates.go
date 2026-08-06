@@ -18,6 +18,12 @@ type Where struct {
 // CommandContext answers, for one command, whether *any* of its executions
 // happened where the user is now.
 //
+// Each signal is false when there is nothing to compare against. Outside a
+// repository there is no branch, so nothing shares one — answering otherwise
+// gave every command that had never run on a branch a multiplier over every
+// command that had, ranking the ones with less context above the ones with
+// more.
+//
 // Any rather than the most recent: the command you ran in this directory last
 // week should still beat one you ran somewhere else yesterday, and asking only
 // about the latest execution loses that.
@@ -39,7 +45,7 @@ func (s *Store) CommandContexts(commands []string, w Where) (map[string]CommandC
 	if len(commands) == 0 {
 		return out, nil
 	}
-	args := []any{w.Cwd, w.Hostname, w.SessionID, w.Branch}
+	args := []any{w.Cwd, w.Cwd, w.Hostname, w.Hostname, w.SessionID, w.SessionID, w.Branch, w.Branch}
 	repoPrefix := ""
 	if w.Repo != "" {
 		repoPrefix = strings.TrimSuffix(w.Repo, "/") + "/"
@@ -51,8 +57,10 @@ func (s *Store) CommandContexts(commands []string, w Where) (map[string]CommandC
 
 	rows, err := s.db.Query(`
 		SELECT command,
-		       MAX(cwd = ?), MAX(hostname = ?), MAX(session_id = ?),
-		       MAX(COALESCE(git_branch, '') = ?),
+		       MAX(? <> '' AND cwd = ?),
+		       MAX(? <> '' AND hostname = ?),
+		       MAX(? <> '' AND session_id = ?),
+		       MAX(? <> '' AND COALESCE(git_branch, '') = ?),
 		       MAX(? <> '' AND (cwd || '/') LIKE ? || '%')
 		  FROM commands
 		 WHERE command IN (`+placeholders(len(commands))+`)
