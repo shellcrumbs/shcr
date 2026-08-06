@@ -4,7 +4,7 @@
 
 Shell history that records **when a command started**, not only that it ran.
 
-Most other history tools write entries after a command finishes, which means
+Most other history tools write an entry after a command finishes, which means
 anything that never finished is simply absent. Shellcrumbs writes a `start`
 event before the command runs and an `end` event after, so it can tell you what
 is running right now, what failed, and what died along with the terminal that
@@ -12,10 +12,10 @@ launched it.
 
 ```
 $ shcr list
+   09:15:40  ◌  ./scripts/migrate.sh --dry-run
    14:22:07  ✓  git pull                                                    412ms
    14:22:19  ✗  npm run build:prod                            build-server   2.4s   127
    14:24:02  ●  npm run dev
-   09:15:40  ◌  ./scripts/migrate.sh --dry-run
 ```
 
 `●` is running, `✗` failed with exit 127, and `◌` is **orphaned** — a command
@@ -48,6 +48,9 @@ go build -o bin/shcr ./cmd/shcr
 cp bin/shcr ~/.local/bin/                        # somewhere a rebuild will not replace
 ```
 
+There is no tagged release yet, so there is nothing to download — see
+[Not yet built](#not-yet-built).
+
 Open a new shell and start working. Nothing is recorded until the hooks are
 loaded, so the shell you ran the install in will not be captured.
 
@@ -55,12 +58,40 @@ To try it without touching any config: `shcr daemon &` in one terminal and
 `eval "$(shcr init bash)"` in another.
 
 
+## All commands
+
+| | |
+|---|---|
+| `shcr init <bash\|zsh\|fish>` | print the shell integration to `eval` |
+| `shcr tui` | open the picker; prints the chosen command to stdout |
+| `shcr list` | show recorded commands |
+| `shcr stats` | summarise what has been recorded |
+| `shcr web` | serve the dashboard on `127.0.0.1` |
+| `shcr import [file...]` | bring in an existing shell history file |
+| `shcr export` | write your history out, to stdout or a file |
+| `shcr sync now\|status\|enable` | cross-machine sync |
+| `shcr key init\|show\|import` | manage the end-to-end encryption key |
+| `shcr redact <id>` | replace a recorded command with a tombstone |
+| `shcr rank stats\|forget` | how well the picker's ordering is doing |
+| `shcr service install\|status\|units\|uninstall` | run the daemon under systemd |
+| `shcr daemon` | run the capture daemon in the foreground |
+| `shcr version`, `shcr help` | version, and this list |
+| `shcr event start\|end`, `shcr nudge <reason>` | called by the shell hooks; not for typing |
+
+`list`, `stats`, `import`, `export`, `web` and `tui` take `-h` to list their
+flags. The rest are subcommand-only and have none; `shcr help` lists them all.
+
+
 ## Everyday use
 
-Press **Ctrl+R** for the picker. Type to filter, `↑↓` to move, `⏎` to put the
-command in your prompt — **editable and unexecuted**: Enter in the picker inserts,
-it does not run. `^Y` copies, `^F` cycles the status filter, `esc` cancels.
-`SHCR_NO_BIND=1` before the `eval` keeps your own Ctrl+R binding.
+Press **Ctrl+R** for the picker. Type to filter, `↑↓` and `PgUp`/`PgDn` to move,
+`⏎` to put the command in your prompt — **editable and unexecuted**: Enter in the
+picker inserts, it does not run. `^Y` copies, `^U` clears what you have typed,
+`^F` cycles the status filter (all → running → failed → orphaned), `esc` cancels.
+
+The picker is `shcr tui`; it prints the chosen command to stdout and nothing
+else. `SHCR_NO_BIND=1` before the `eval` keeps your own Ctrl+R binding, and you
+can then bind `shcr tui` wherever you like.
 
 ```sh
 shcr list                      # recent commands, newest last
@@ -68,6 +99,8 @@ shcr list -n 50 -q "npm run"   # full-text search
 shcr list --status running     # what is in flight right now
 shcr list --status orphaned    # what never reported back
 shcr list --since 2h
+shcr list --host build-server --cwd ~/app --session <id>
+shcr list --full               # whole multi-line commands, not one line each
 shcr stats
 shcr redact <id>               # replace one command's text, everywhere
 ```
@@ -86,7 +119,35 @@ Colour turns itself off when piped or redirected and honours `NO_COLOR`.
 `--color always` forces it back for `| less -R`; `SHCR_THEME=light` suits a light
 terminal.
 
----
+
+## How the picker orders results
+
+With nothing typed, the picker shows history newest first — you have just
+pressed Ctrl+R, and the thing you want is usually the thing you just did.
+
+Once you type, results are ordered by how well they match **and** how much use
+they have had, in that order of priority:
+
+1. **Match quality is a hard gate.** A prefix match always outranks a substring
+   match, which always outranks a fuzzy one. Nothing about frequency can promote
+   a worse kind of match above a better one.
+2. **Within a tier, frecency decides.** A decaying counter with a 72-hour
+   half-life, so a command you ran ten times last month sits below one you ran
+   twice this morning.
+3. **Then context adjusts it.** Same directory, same git repo, same branch, same
+   host and same shell session all count for something, as does whether the
+   command usually succeeds. A command that has never once worked is pushed
+   down; one that failed in the last fifteen minutes is pulled up, because you
+   are probably trying to fix it.
+
+Identical commands appear once, with the detail pane saying what the row stands
+for (`ran 8× · 8 ok`).
+
+The picker keeps a local record of what you searched for and which result you
+took, so the ordering can be measured rather than guessed at. `shcr rank stats`
+shows it, `shcr rank forget` empties it, and it never leaves the machine — see
+[Privacy](#privacy-and-what-actually-protects-you).
+
 
 ## Bringing in your existing history
 
@@ -107,6 +168,10 @@ order and flagged approximate.
 
 Imports run through the same secret filter as live capture.
 
+Because a history file records no exit codes and often no times, imported
+commands carry less signal than captured ones, and the picker's ordering knows
+less about them than about anything recorded since.
+
 
 ## Getting your history back out
 
@@ -117,6 +182,10 @@ shcr export --events             # the raw event log — lossless
 shcr export -o history.jsonl     # to a file, created 0600
 shcr export -q npm --since 720h  # the same filters as `shcr list`
 ```
+
+`--events` is the form to keep: command rows are derived from those events, so
+replaying them into an empty database reconstructs everything, redactions
+included.
 
 
 ## Syncing another machine
@@ -140,7 +209,8 @@ access to everything already uploaded, and nobody can recover it for you.
 
 **Backends.** Only a `file` backend exists: a directory treated as the bucket.
 That covers a NAS mount, a synced folder, or an `rclone mount`, all still fully
-encrypted. We plan to support other backends in the future.
+encrypted. There is no S3, GCS or HTTP backend — see
+[Not yet built](#not-yet-built).
 
 **When syncing happens.** Two bounds and a set of triggers, rather than a
 polling interval:
@@ -158,20 +228,6 @@ Sitting down at a terminal is when another machine's history is most worth
 having, so reacting to that beats polling for it: the cadence is tight while you
 work and near-silent while you are away. `shcr sync now` and the dashboard's
 button bypass the floor.
-
-
-## Redaction
-
-**Redaction rules.** Built-in patterns cover AWS keys, GitHub/GitLab/Slack
-tokens, `sk-` API keys, bearer and basic auth headers, passwords in connection
-URIs and `--password` flags, JWTs, and private key blocks. Add your own in
-`~/.local/share/shcr/redact.conf`:
-
-```
-# one rule per line
-redact \bcorp-[a-z0-9]{8}\b
-skip   ^vault write
-```
 
 
 ## The dashboard
@@ -211,6 +267,27 @@ nobody about it.
 | `GET`/`PATCH /api/settings` | sync toggles only |
 | `POST /api/sync` | runs a sync round |
 | `GET /api/events` | live stream of row changes |
+
+
+## Redaction
+
+Built-in patterns cover AWS keys, GitHub/GitLab/Slack tokens, `sk-` API keys,
+bearer and basic auth headers, passwords in connection URIs and `--password`
+flags, JWTs, and private key blocks. Add your own in
+`~/.local/share/shcr/redact.conf`:
+
+```
+# one rule per line
+redact \bcorp-[a-z0-9]{8}\b
+skip   ^vault write
+```
+
+`redact` replaces the matched text; `skip` drops the command entirely, so
+nothing about it is stored.
+
+`shcr redact <id>` handles the one that got away: it appends an event, so the
+text is replaced on every machine on the next sync, in the search index as well
+as the table.
 
 
 ## Running it as a service
@@ -272,19 +349,33 @@ timestamps and how many machines you have, even though it cannot read contents.
 Measured on one Linux laptop, which is the caveat that matters: only the query
 row is pinned by a test in the tree (`TestQueryPerformanceAtScale`). The others
 come from the manual procedures in [CONTRIBUTING.md](CONTRIBUTING.md), so treat
-them as one machine's numbers rather than a benchmark suite:
+them as one machine's numbers rather than a benchmark suite.
 
 | | Target | Measured |
 |---|---|---|
 | Added prompt latency | < 5ms | **1.7ms** (bash and zsh) |
-| Ctrl+R to first paint, 500k rows | < 50ms | **21ms** |
+| Ctrl+R to first paint, 500k rows | < 50ms | **30ms** |
 | Filtered query, 500k rows | < 50ms | **0.1–0.5ms** typical |
+| Ranking, per keystroke, 20k distinct commands | < 25ms | **pinned by `TestRankingCostPerKeystroke`** |
 | Daemon resident memory | < 30MB | **8.7MB** |
 | Importing 10k history entries | — | **1.7s** |
 
 
 ## Known limits
 
+- **Startup pays a terminal query.** Bubble Tea, which the picker is built on,
+  queries the terminal for its background colour from a package `init()` — so
+  every `shcr` command does it, whether or not it draws anything. Terminals
+  answer in about a millisecond. One that does *not* answer costs a five-second
+  stall before any output. `tmux`, `screen` and `TERM=dumb` are skipped, `CI` is
+  skipped, and piped or redirected output is skipped; a bare pty is not, which
+  is worth knowing before scripting `shcr` under one.
+- **`shcr list -q` matches tokens and prefixes; the picker also matches
+  subsequences.** In the picker `gitpsh` finds `git push`. `shcr list -q` goes
+  through SQLite's full-text index, where it does not: `-q "npm run"` and
+  `-q bui` work, `-q gitpsh` finds nothing.
+- **`^F` does not cycle through `completed`.** The filter goes all → running →
+  failed → orphaned. `shcr list --status completed` does work.
 - **Multiline fidelity under bash.** bash normalises leading tabs on continuation
   lines unless `shopt -s lithist` is set, so a tab-indented heredoc does not
   round-trip byte-identically. Storage is exact — the loss is upstream, in what
@@ -300,9 +391,6 @@ them as one machine's numbers rather than a benchmark suite:
   sweep marks it orphaned.
 - **Redaction is pattern-based.** It catches the credential shapes listed above;
   a password passed positionally has no distinctive shape and will not be caught.
-- **Search matches tokens and prefixes, not subsequences.** `npm bui` finds
-  `npm run build`; `gitpsh` will not find `git push`. Fuzzy subsequence matching
-  is not implemented.
 - **Nothing is ever pruned**, and on current evidence nothing needs to be. An
   event measured about 340 bytes on one real 10,000-entry history, so five busy
   machines for a year come to a few hundred megabytes. Deleting old batches
@@ -314,18 +402,21 @@ them as one machine's numbers rather than a benchmark suite:
   real shells; fish is not.
 
 
-
-## Not (yet) built
+## Not yet built
 
 - **GCS / S3 / R2 backends.** The `Storage` interface is four methods and the
   engine is backend-agnostic, but writing them without a live bucket to test
-  against would mean shipping code nobody has run.
+  against would mean shipping code nobody has run. Until then, syncing needs a
+  directory both machines can see.
+- **A tagged release.** The pipeline exists — GoReleaser builds static
+  `CGO_ENABLED=0` binaries for linux amd64 and arm64 with checksums, on tag —
+  but no tag has been pushed, so `go install` or a checkout is the only way in.
+  No Homebrew formula or distribution package.
 - **Command output capture.** Only the command line and its result are recorded.
-- **macOS.** Everything is pure Go and cross-compiles, but the service
-  integration is systemd-only and nothing has been exercised on a Mac.
-- **Release packaging.** All four targets build with `CGO_ENABLED=0`
-  (linux/darwin × amd64/arm64, ~17MB each), but there is no release pipeline,
-  checksums or formula yet.
+- **macOS and Windows.** Everything is pure Go, but the service integration is
+  systemd-only, the socket and `/proc` assumptions are Linux, and nothing has
+  been exercised elsewhere. The release build is deliberately Linux-only for
+  that reason.
 
 
 ## Contributing
@@ -333,7 +424,6 @@ them as one machine's numbers rather than a benchmark suite:
 [CONTRIBUTING.md](CONTRIBUTING.md) covers how it is put together, the invariants
 a change has to preserve, and how the parts that cannot be unit-tested — shell
 hooks, the picker, the dashboard — are exercised instead.
-
 
 
 ## Licence
