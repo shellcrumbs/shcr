@@ -189,7 +189,7 @@ func parseZsh(raw []byte, modTime time.Time) []Entry {
 		// A trailing backslash continues the command onto the next line. This is
 		// how zsh stores anything multi-line, and 100-odd of them in a real
 		// history is normal.
-		for len(cmd) > 0 && cmd[len(cmd)-1] == '\\' && i+1 < len(lines) {
+		for continuesLine(cmd) && i+1 < len(lines) {
 			cmd = cmd[:len(cmd)-1]
 			i++
 			cmd = append(cmd, '\n')
@@ -264,7 +264,7 @@ func parseBash(raw []byte, modTime time.Time) []Entry {
 		}
 		cmd := append([]byte(nil), line...)
 		// bash continues a multi-line entry with a trailing backslash.
-		for len(cmd) > 0 && cmd[len(cmd)-1] == '\\' && i+1 < len(lines) {
+		for continuesLine(cmd) && i+1 < len(lines) {
 			cmd = cmd[:len(cmd)-1]
 			i++
 			cmd = append(cmd, '\n')
@@ -331,6 +331,22 @@ func approximateUndated(entries []Entry, end time.Time) {
 		}
 		i = j
 	}
+}
+
+// continuesLine reports whether a history line ends in a backslash that escapes
+// the newline, so the command carries on below.
+//
+// Counted rather than checked, because backslashes escape each other. `echo C:\\`
+// ends in a literal backslash and is a whole command; reading it as a
+// continuation swallowed whatever ran next — and under zsh it swallowed the
+// following entry's `: 1700000001:0;` header along with it, storing the two as
+// one unparseable command.
+func continuesLine(s []byte) bool {
+	n := 0
+	for i := len(s) - 1; i >= 0 && s[i] == '\\'; i-- {
+		n++
+	}
+	return n%2 == 1
 }
 
 // ---------------------------------------------------------------- fish
