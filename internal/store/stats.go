@@ -50,21 +50,29 @@ func (s *Store) RefreshCommandStats(from int64) (int, int64, error) {
 		return 0, from, err
 	}
 
-	var (
-		rows *sql.Rows
-		err  error
-	)
+	// One transaction for the whole pass. A full rebuild empties the table
+	// before refilling it, and outside a transaction any failure between the two
+	// — the query, a scan, opening the transaction itself — left the cache empty
+	// with nothing to put back. It is only a cache, and the next pass rebuilds
+	// it, but until then the picker ranks on nothing.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, from, err
+	}
+	defer tx.Rollback()
+
+	var rows *sql.Rows
 	if from <= 0 {
-		if _, err := s.db.Exec(`DELETE FROM command_stats`); err != nil {
+		if _, err := tx.Exec(`DELETE FROM command_stats`); err != nil {
 			return 0, from, err
 		}
-		rows, err = s.db.Query(`SELECT DISTINCT command FROM commands WHERE command <> ''`)
+		rows, err = tx.Query(`SELECT DISTINCT command FROM commands WHERE command <> ''`)
 	} else {
 		// INDEXED BY is doing real work on the equivalent commands query: left
 		// to choose, SQLite scans an index end to end when it satisfies a
 		// DISTINCT, ignoring a far more selective bound. Here the events rowid
 		// is the primary key, so the range is already the cheap path.
-		rows, err = s.db.Query(`
+		rows, err = tx.Query(`
 			SELECT DISTINCT c.command
 			  FROM events e JOIN commands c ON c.id = e.command_id
 			 WHERE e.rowid > ? AND e.rowid <= ? AND c.command <> ''`, from, upTo)
@@ -86,14 +94,13 @@ func (s *Store) RefreshCommandStats(from int64) (int, int64, error) {
 		return 0, from, err
 	}
 	if len(changed) == 0 {
-		return 0, upTo, s.setStatsWatermark(upTo)
+		// Still inside the transaction: a full rebuild of an empty history has
+		// a DELETE to commit along with the watermark.
+		if _, err := tx.Exec(`UPDATE stats_meta SET watermark = ? WHERE id = 1`, upTo); err != nil {
+			return 0, from, err
+		}
+		return 0, upTo, tx.Commit()
 	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, from, err
-	}
-	defer tx.Rollback()
 
 	upsert, err := tx.Prepare(`
 		INSERT INTO command_stats
@@ -134,11 +141,6 @@ func (s *Store) RefreshCommandStats(from int64) (int, int64, error) {
 		return 0, from, err
 	}
 	return len(changed), upTo, tx.Commit()
-}
-
-func (s *Store) setStatsWatermark(w int64) error {
-	_, err := s.db.Exec(`UPDATE stats_meta SET watermark = ? WHERE id = 1`, w)
-	return err
 }
 
 // statFor recomputes one command's statistics from all of its executions.
