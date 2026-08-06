@@ -324,6 +324,18 @@ func approximateUndated(entries []Entry, end time.Time) {
 			}
 		}
 		step := upper.Sub(lower) / time.Duration(n+1)
+		// No usable window. Either the file's dated entries are out of order —
+		// which one merged from two shells easily is — or they sit close enough
+		// together that a share of the gap is under the millisecond these are
+		// stored in. Both land every entry in the run on the same timestamp, or
+		// a decreasing one, and an import's identity is derived from its time:
+		// identical times collapse distinct commands into a single entry. Space
+		// backwards from the later neighbour instead, so the run is at least
+		// strictly increasing.
+		if step < time.Millisecond {
+			lower = upper.Add(-time.Duration(n+1) * time.Second)
+			step = time.Second
+		}
 
 		for k := 0; k < n; k++ {
 			entries[i+k].StartTime = lower.Add(time.Duration(k+1) * step).UnixMilli()
