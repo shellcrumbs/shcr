@@ -127,7 +127,7 @@ getting started:
   shcr daemon &                 # or run under systemd
 
 second machine:
-  shcr key show                 # on the first machine, write the words down
+  shcr key show --reveal        # on the first machine, write the words down
   shcr key import               # on the new one
   shcr sync enable --dir <shared-bucket-dir>
 `)
@@ -333,7 +333,12 @@ func cmdKey(args []string) error {
 	switch args[0] {
 	case "init":
 		if _, _, err := ks.Load(); err == nil {
-			return fmt.Errorf("a key already exists; `shcr key show` prints it, and replacing it would orphan everything already in the bucket")
+			return fmt.Errorf("a key already exists; `shcr key show --reveal` prints it, and replacing it would orphan everything already in the bucket")
+		}
+		// Before generating, not after: refusing once the key is saved would
+		// leave one whose phrase was never shown to anybody.
+		if err := requireTerminal(); err != nil {
+			return err
 		}
 		k, err := crypto.GenerateKey()
 		if err != nil {
@@ -358,6 +363,11 @@ func cmdKey(args []string) error {
 		reveal := fs.Bool("reveal", false, "actually print the recovery phrase")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		if *reveal {
+			if err := requireTerminal(); err != nil {
+				return err
+			}
 		}
 		k, src, err := ks.Load()
 		if err != nil {
@@ -416,6 +426,22 @@ func readSecretLine() (string, error) {
 	// output would otherwise run on from the prompt.
 	fmt.Println()
 	return string(b), err
+}
+
+// requireTerminal refuses to continue when stdout is not a terminal.
+//
+// The recovery phrase is the one output that must not end up in a file. A
+// redirect creates it with the caller's umask — 0664 on a common default — while
+// the key it stands for is kept at 0600, the database at 0600 and `shcr export
+// -o` takes care to do the same. `shcr key import` reads the words from stdin,
+// so nothing legitimate needs to pipe them anywhere.
+func requireTerminal() error {
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		return nil
+	}
+	return errors.New("refusing to write the recovery phrase anywhere but a terminal:\n" +
+		"  redirected, it would be created with your umask, readable by anyone on this machine.\n" +
+		"  Run this in a terminal and copy the words down by hand.")
 }
 
 func printPhrase(phrase string) {

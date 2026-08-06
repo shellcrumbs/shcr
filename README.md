@@ -353,6 +353,11 @@ ssh into will not sweep orphans or sync while you are away.
   never reach the spool file either, and again in the daemon as a backstop.
 - **`shcr redact` propagates.** It appends an event, so the text is replaced on
   every machine, in the search index as well as the table.
+- **The recovery phrase only ever goes to a terminal.** `shcr key init` and
+  `shcr key show --reveal` refuse to run with their output redirected, because a
+  redirect would create the file with your umask — `0664` on a common default —
+  and this is the one output that is the secret itself. `shcr key import` reads
+  the words from stdin, so nothing legitimate needs to pipe them anywhere.
 - **Everything on disk is yours alone.** Data and state directories `0700`; the
   database, its write-ahead log, the spool, the key file and the config `0600`;
   the daemon socket `0600` in a per-user runtime directory.
