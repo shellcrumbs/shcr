@@ -62,7 +62,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart={{.Binary}} daemon
+ExecStart={{.BinaryArg}} daemon
 Restart=on-failure
 RestartSec=2
 
@@ -84,7 +84,10 @@ WantedBy=default.target
 `
 
 type params struct {
-	Binary          string
+	Binary string
+	// BinaryArg is Binary as a systemd command-line word: quoted, so a path
+	// with a space in it stays one argument.
+	BinaryArg       string
 	SocketUnit      string
 	AddressFamilies string
 }
@@ -109,12 +112,22 @@ func Render(binary string, networkBackend bool) (socket, service string, err err
 	if strings.ContainsAny(binary, "\n\r") {
 		return "", "", fmt.Errorf("refusing to write a unit for a path containing a newline: %q", binary)
 	}
+	// A double quote or a backslash would end or escape their way out of the
+	// quoting below, and neither belongs in a path anyone meant to type.
+	if strings.ContainsAny(binary, "\"\\") {
+		return "", "", fmt.Errorf("refusing to write a unit for a path containing a quote or backslash: %q", binary)
+	}
 
 	families := "AF_UNIX"
 	if networkBackend {
 		families += " AF_INET AF_INET6"
 	}
-	p := params{Binary: binary, SocketUnit: SocketUnit, AddressFamilies: families}
+	// Quoted, because systemd splits ExecStart on whitespace: an unquoted
+	// /home/u/my apps/shcr would run /home/u/my with apps/shcr as its argument.
+	// Quoting is safe for paths without spaces too, so there is no need to
+	// decide which kind this is.
+	p := params{Binary: binary, BinaryArg: `"` + binary + `"`,
+		SocketUnit: SocketUnit, AddressFamilies: families}
 
 	var sb, svb bytes.Buffer
 	st := template.Must(template.New("socket").Parse(socketTemplate))
