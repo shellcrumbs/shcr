@@ -69,7 +69,7 @@ To try it without touching any config: `shcr daemon &` in one terminal and
 | `shcr web` | serve the dashboard on `127.0.0.1` |
 | `shcr import [file...]` | bring in an existing shell history file |
 | `shcr export` | write your history out, to stdout or a file |
-| `shcr sync now\|status\|enable` | cross-machine sync |
+| `shcr sync now\|status\|enable` | cross-machine sync; `enable` takes `--dir` or `--bucket` |
 | `shcr key init\|show\|import` | manage the end-to-end encryption key |
 | `shcr redact <id>` | replace a recorded command with a tombstone |
 | `shcr rank stats\|forget` | how well the picker's ordering is doing |
@@ -207,10 +207,26 @@ The bucket only ever holds ciphertext — XChaCha20-Poly1305, a fresh nonce per
 batch. The key never leaves the machines it is on. Losing the phrase means losing
 access to everything already uploaded, and nobody can recover it for you.
 
-**Backends.** Only a `file` backend exists: a directory treated as the bucket.
-That covers a NAS mount, a synced folder, or an `rclone mount`, all still fully
-encrypted. There is no S3, GCS or HTTP backend — see
-[Not yet built](#not-yet-built).
+**Backends.** Two. `--dir` treats a directory as the bucket, which covers a NAS
+mount, a synced folder or an `rclone mount`. `--bucket` uses Google Cloud
+Storage:
+
+```sh
+shcr sync enable --bucket my-bucket --prefix shcr   # --prefix is optional
+```
+
+Credentials come from Application Default Credentials, so
+`gcloud auth application-default login` or a service account key in
+`GOOGLE_APPLICATION_CREDENTIALS` both work, and shcr never holds a credential of
+its own. The service account needs **Storage Object Admin** on the bucket and
+nothing more. Either way the bucket only ever holds ciphertext.
+
+Standard storage class is the one to pick: shcr writes many small objects and
+never deletes them, so Autoclass's per-object management fee outgrows the
+storage it saves, and the colder classes charge retrieval exactly when a rebuilt
+machine pulls its whole history back.
+
+There is no S3 or R2 backend yet — see [Not yet built](#not-yet-built).
 
 **When syncing happens.** Two bounds and a set of triggers, rather than a
 polling interval:
@@ -400,14 +416,18 @@ them as one machine's numbers rather than a benchmark suite.
   a cost one.
 - **fish hooks are written but untested.** bash and zsh are exercised against
   real shells; fish is not.
+- **The GCS backend has not been run against a real bucket.** It is covered by
+  a conformance suite that runs every assertion against both backends, and by a
+  fake that copies the API semantics that matter — `startOffset` is inclusive,
+  listings page — but a fake agrees with whatever you believed when you wrote
+  it. The directory backend is the one with real mileage.
 
 
 ## Not yet built
 
-- **GCS / S3 / R2 backends.** The `Storage` interface is four methods and the
-  engine is backend-agnostic, but writing them without a live bucket to test
-  against would mean shipping code nobody has run. Until then, syncing needs a
-  directory both machines can see.
+- **S3 / R2 backends.** The `Storage` interface is four methods and the engine
+  is backend-agnostic, so these are a day's work each; nobody has needed one
+  yet. GCS exists.
 - **A tagged release.** The pipeline exists — GoReleaser builds static
   `CGO_ENABLED=0` binaries for linux amd64 and arm64 with checksums, on tag —
   but no tag has been pushed, so `go install` or a checkout is the only way in.

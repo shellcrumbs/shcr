@@ -466,10 +466,15 @@ func syncEngineWith(st *store.Store) (*syncengine.Engine, error) {
 	if cfg.Sync.Backend == "" {
 		return nil, fmt.Errorf("sync is not configured (run: shcr sync enable --dir <path>)")
 	}
-	if cfg.Sync.Backend != "file" {
+	var storage syncengine.Storage
+	switch cfg.Sync.Backend {
+	case "file":
+		storage, err = syncengine.NewFileStorage(cfg.Sync.Path)
+	case "gcs":
+		storage, err = syncengine.NewGCSStorage(context.Background(), cfg.Sync.Bucket, cfg.Sync.Prefix)
+	default:
 		return nil, fmt.Errorf("unknown sync backend %q", cfg.Sync.Backend)
 	}
-	storage, err := syncengine.NewFileStorage(cfg.Sync.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -498,16 +503,17 @@ func cmdSync(args []string) error {
 	case "enable":
 		fs := flag.NewFlagSet("sync enable", flag.ExitOnError)
 		dir := fs.String("dir", "", "directory to use as the bucket")
+		bucket := fs.String("bucket", "", "Google Cloud Storage bucket to use instead of a directory")
+		prefix := fs.String("prefix", "", "folder inside the bucket, so one bucket can hold more than shcr")
 		shareHost := fs.Bool("share-hostname", false, "put a hostname hint in the manifest (visible to the storage provider)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		if *dir == "" {
-			return fmt.Errorf("sync enable: --dir is required")
-		}
-		abs, err := filepath.Abs(*dir)
-		if err != nil {
-			return err
+		switch {
+		case *dir == "" && *bucket == "":
+			return fmt.Errorf("sync enable: --dir or --bucket is required")
+		case *dir != "" && *bucket != "":
+			return fmt.Errorf("sync enable: --dir and --bucket are alternatives, not both")
 		}
 		ks := crypto.NewKeystore(paths.DataDir())
 		if _, _, err := ks.Load(); err != nil {
@@ -517,11 +523,23 @@ func cmdSync(args []string) error {
 		if err != nil {
 			return err
 		}
-		cfg.Sync = config.Sync{Enabled: true, Backend: "file", Path: abs, ShareHostname: *shareHost}
+		cfg.Sync = config.Sync{Enabled: true, ShareHostname: *shareHost}
+		var where string
+		if *bucket != "" {
+			cfg.Sync.Backend, cfg.Sync.Bucket, cfg.Sync.Prefix = "gcs", *bucket, *prefix
+			where = "gs://" + *bucket + "/" + *prefix
+		} else {
+			abs, err := filepath.Abs(*dir)
+			if err != nil {
+				return err
+			}
+			cfg.Sync.Backend, cfg.Sync.Path = "file", abs
+			where = abs
+		}
 		if err := config.Save(cfg); err != nil {
 			return err
 		}
-		fmt.Printf("Sync enabled, using %s\n", abs)
+		fmt.Printf("Sync enabled, using %s\n", where)
 		fmt.Println("Restart the daemon to pick this up, or run `shcr sync now`.")
 		return nil
 
@@ -556,8 +574,14 @@ func cmdSync(args []string) error {
 			return err
 		}
 		backend := "not configured"
-		if cfg.Sync.Backend != "" {
-			backend = fmt.Sprintf("%s backend at %s", cfg.Sync.Backend, cfg.Sync.Path)
+		switch cfg.Sync.Backend {
+		case "file":
+			backend = "file backend at " + cfg.Sync.Path
+		case "gcs":
+			backend = "gcs backend at gs://" + cfg.Sync.Bucket + "/" + cfg.Sync.Prefix
+		case "":
+		default:
+			backend = cfg.Sync.Backend + " backend"
 		}
 		for _, row := range [][2]string{
 			{"sync", backend},

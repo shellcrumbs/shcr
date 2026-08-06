@@ -35,12 +35,17 @@ func DefaultRanking() Ranking { return Ranking{LogAcceptances: true} }
 type Sync struct {
 	// Enabled gates the background sync loop. Sync is off until asked for.
 	Enabled bool `json:"enabled"`
-	// Backend selects the storage implementation. Only "file" exists so far —
-	// a directory acting as the bucket, which covers a NAS mount, a synced
-	// folder or an rclone mount.
+	// Backend selects the storage implementation: "file" for a directory acting
+	// as the bucket — a NAS mount, a synced folder, an rclone mount — or "gcs"
+	// for a Google Cloud Storage bucket.
 	Backend string `json:"backend"`
 	// Path is the bucket root for the file backend.
 	Path string `json:"path"`
+	// Bucket is the bucket name for the gcs backend.
+	Bucket string `json:"bucket,omitempty"`
+	// Prefix optionally nests everything under a folder inside that bucket, so
+	// one bucket can hold more than shcr.
+	Prefix string `json:"prefix,omitempty"`
 	// ShareHostname puts a hostname hint in the manifest, which the storage
 	// provider can read. Off by default.
 	ShareHostname bool `json:"share_hostname"`
