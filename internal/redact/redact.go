@@ -216,7 +216,16 @@ func secretSpan(rule Rule, m []int) (int, int) {
 			}
 		}
 		// Label captured but no value group matched: blank everything after it.
-		return m[3], m[1]
+		//
+		// Empty when the label group runs to the end of the match, which is what
+		// a hand-written `token:(\S+)` looks like — there the one group is the
+		// value, not a label. Blanking nothing would leave the secret in place
+		// with a marker appended after it, reading as though it had been
+		// redacted. Fall through to the whole match instead: losing the label
+		// costs a little context, and the alternative costs the secret.
+		if m[3] < m[1] {
+			return m[3], m[1]
+		}
 	}
 	return m[0], m[1]
 }
