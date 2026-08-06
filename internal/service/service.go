@@ -194,10 +194,14 @@ func Available() error {
 		return fmt.Errorf("XDG_RUNTIME_DIR is unset, so there is no user session to install into")
 	}
 	cmd := exec.Command("systemctl", "--user", "is-system-running")
-	out, _ := cmd.CombinedOutput()
-	// Any answer means a user manager replied, and every state it can report is
-	// one we can install into — "degraded" just means some other unit failed.
-	// Silence is the only answer that says there is nothing there.
+	// Output, not CombinedOutput: a manager that replies writes its state to
+	// stdout, and one that cannot be reached writes "Failed to connect to user
+	// scope bus" to stderr. Reading them together counted that failure as an
+	// answer, so a machine with no user session reported systemd as available
+	// and the install went ahead to fail later.
+	out, _ := cmd.Output()
+	// Any state it names is one we can install into — "degraded" only means some
+	// other unit failed. Silence is what says there is nothing there.
 	if strings.TrimSpace(string(out)) == "" {
 		return fmt.Errorf("no systemd user manager is reachable for this session")
 	}
