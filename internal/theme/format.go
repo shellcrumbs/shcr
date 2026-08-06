@@ -218,21 +218,86 @@ func Wrap(s string, w, maxLines int) []string {
 	var out []string
 	var cur strings.Builder
 	used := 0
+
+	flush := func() bool {
+		out = append(out, cur.String())
+		cur.Reset()
+		used = 0
+		return maxLines > 0 && len(out) >= maxLines
+	}
+	// Breaking mid-word split `npm run dev` across lines as "npm ru" / "n dev",
+	// which reads as a different command. Words move whole where they fit; one
+	// too long for a line of its own — a path, a URL — still has to be cut.
+	for _, word := range splitKeepingSpaces(s) {
+		ww := Width(word)
+		if used > 0 && used+ww > w {
+			if flush() {
+				return out
+			}
+			// A space only exists to separate words; carrying it to the start of
+			// the next line would indent it for no reason.
+			if strings.TrimSpace(word) == "" {
+				continue
+			}
+		}
+		for used+ww > w {
+			// Longer than a whole line: take what fits and carry the rest. A cut,
+			// not a truncation — an ellipsis here would drop the characters it
+			// stands for, and this text is going to be read in full over the next
+			// few lines.
+			head := cutTo(word, w-used)
+			if head == "" {
+				break
+			}
+			cur.WriteString(head)
+			if flush() {
+				return out
+			}
+			word = word[len(head):]
+			ww = Width(word)
+		}
+		cur.WriteString(word)
+		used += ww
+	}
+	return append(out, cur.String())
+}
+
+// cutTo returns the longest prefix of s that fits in w columns, adding nothing.
+func cutTo(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	used := 0
 	g := uniseg.NewGraphemes(s)
 	for g.Next() {
 		cw := g.Width()
 		if used+cw > w {
-			out = append(out, cur.String())
-			cur.Reset()
-			used = 0
-			if maxLines > 0 && len(out) >= maxLines {
-				return out
-			}
+			break
 		}
-		cur.WriteString(g.Str())
+		b.WriteString(g.Str())
 		used += cw
 	}
-	return append(out, cur.String())
+	return b.String()
+}
+
+// splitKeepingSpaces breaks text into words and the runs of spaces between
+// them, so the wrapper can decide where a line ends without losing anything.
+func splitKeepingSpaces(s string) []string {
+	var out []string
+	start, inSpace := 0, false
+	for i, r := range s {
+		if isSpace := r == ' '; isSpace != inSpace {
+			if i > start {
+				out = append(out, s[start:i])
+			}
+			start, inSpace = i, isSpace
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
 }
 
 // Pad extends a possibly-styled string to an exact display width.
@@ -259,7 +324,7 @@ func Tokens(q string) []string {
 // matched.
 func (t *Theme) Highlight(text string, tokens []string) string {
 	if len(tokens) == 0 || text == "" {
-		return text
+		return t.body(text)
 	}
 	// Lowercasing does not preserve length — U+212A KELVIN SIGN is three bytes
 	// and folds to a one-byte "k" — so an offset found in the folded text does
@@ -307,7 +372,7 @@ func (t *Theme) Highlight(text string, tokens []string) string {
 		if mark[i] {
 			b.WriteString(t.Match.Render(text[i:j]))
 		} else {
-			b.WriteString(text[i:j])
+			b.WriteString(t.body(text[i:j]))
 		}
 		i = j
 	}

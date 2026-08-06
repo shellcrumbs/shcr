@@ -40,10 +40,31 @@ var (
 	// them reads as one quiet block beside the command.
 	colorChipBG = lipgloss.AdaptiveColor{Light: "#eaeef2", Dark: "#262c36"}
 	colorChipFG = lipgloss.AdaptiveColor{Light: "#57606a", Dark: "#9aa5b1"}
+
+	// The selected row is a band across the full width. A marker and bold text
+	// alone were too easy to lose in a full screen of results — bold carries
+	// almost no weight on a light terminal, and the eye has nothing to land on.
+	// Still a surface rather than a hue, so it sits under the status colours
+	// instead of competing with them.
+	colorSelBG = lipgloss.AdaptiveColor{Light: "#dbe3ec", Dark: "#2d3542"}
 )
 
 type Theme struct {
 	r *lipgloss.Renderer
+
+	// sel is this theme again, with every style carrying the selection
+	// background. A selected row is rendered entirely through it.
+	//
+	// Applying a background to the finished line instead does not work: each
+	// inner style ends with a reset, which clears the background for everything
+	// after it and leaves the band in stripes.
+	sel *Theme
+	// fill paints the gaps — padding, separators, the spaces between chips.
+	// Without it the band would show the terminal through every space in the row.
+	fill lipgloss.Style
+	// hasBG marks the selection variant, so plain runs of text know whether they
+	// need painting at all.
+	hasBG bool
 
 	Frame    lipgloss.Style
 	Title    lipgloss.Style
@@ -112,21 +133,61 @@ func NewWithMode(w io.Writer, mode ColorMode) *Theme {
 }
 
 func build(r *lipgloss.Renderer) *Theme {
-	chip := r.NewStyle().Background(colorChipBG).Padding(0, 1)
+	t := buildOn(r, nil)
+	t.sel = buildOn(r, colorSelBG)
+	return t
+}
+
+// buildOn builds the palette over an optional background. bg nil is the normal
+// theme; non-nil is the selection variant.
+func buildOn(r *lipgloss.Renderer, bg lipgloss.TerminalColor) *Theme {
+	base := r.NewStyle()
+	if bg != nil {
+		base = base.Background(bg)
+	}
+	// On a selected row the chip keeps its shape but not its own surface: a
+	// second tint inside the band reads as a hole punched in it.
+	chipSurface := lipgloss.TerminalColor(colorChipBG)
+	if bg != nil {
+		chipSurface = bg
+	}
+	chip := base.Background(chipSurface).Padding(0, 1)
+
 	return &Theme{
 		r:        r,
-		Frame:    r.NewStyle().Foreground(colorFrame),
-		Title:    r.NewStyle().Foreground(colorAccent).Bold(true),
-		Muted:    r.NewStyle().Foreground(colorMuted),
-		Accent:   r.NewStyle().Foreground(colorAccent),
-		Match:    r.NewStyle().Foreground(colorAccent).Bold(true),
-		Selected: r.NewStyle().Bold(true),
-		Label:    r.NewStyle().Foreground(colorMuted),
-		Error:    r.NewStyle().Foreground(colorFailed).Bold(true),
+		fill:     base,
+		hasBG:    bg != nil,
+		Frame:    base.Foreground(colorFrame),
+		Title:    base.Foreground(colorAccent).Bold(true),
+		Muted:    base.Foreground(colorMuted),
+		Accent:   base.Foreground(colorAccent),
+		Match:    base.Foreground(colorAccent).Bold(true),
+		Selected: base.Bold(true),
+		Label:    base.Foreground(colorMuted),
+		Error:    base.Foreground(colorFailed).Bold(true),
 
 		chipInfo: chip.Foreground(colorChipFG),
 		chipExit: chip.Foreground(colorFailed),
 	}
+}
+
+// body paints a plain run of text so it does not punch a hole in a selected
+// row. On the normal theme it is the identity.
+func (t *Theme) body(s string) string {
+	if !t.hasBG || s == "" {
+		return s
+	}
+	return t.fill.Render(s)
+}
+
+// padTo pads s out to w columns, painting the padding when there is a band to
+// keep unbroken.
+func (t *Theme) padTo(s string, w int) string {
+	d := w - Width(s)
+	if d <= 0 {
+		return s
+	}
+	return s + t.body(strings.Repeat(" ", d))
 }
 
 // resolveDarkBackground prefers an explicit setting, then the COLORFGBG hint
@@ -187,7 +248,9 @@ func StatusGlyph(status string) string {
 // Dot is the status indicator: one glyph, one saturated colour, the only strong
 // colour in a row.
 func (t *Theme) Dot(status string) string {
-	return t.r.NewStyle().Foreground(StatusColor(status)).Render(StatusGlyph(status))
+	// fill rather than a bare style off the renderer: on a selected row this is
+	// the one glyph that would otherwise sit in a hole in the band.
+	return t.fill.Foreground(StatusColor(status)).Render(StatusGlyph(status))
 }
 
 // ImportedGlyph marks a command recovered from a shell's history file.

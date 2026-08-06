@@ -39,6 +39,11 @@ type RowOpts struct {
 	// picker wants it — with no clock column, two similar commands are told
 	// apart by when they ran. `shcr list` already prints the time itself.
 	ShowAge bool
+
+	// selected is the same flag as Selected, after Row has switched to the
+	// selection variant. It draws the marker and the bold text without sending
+	// the row round the switch a second time.
+	selected bool
 }
 
 const (
@@ -63,6 +68,14 @@ func (t *Theme) Row(c store.Command, o RowOpts) string {
 	if o.Width <= 0 {
 		return ""
 	}
+	// Everything below is drawn through the selection variant, so every piece of
+	// the row — text, chips, padding, the gaps between them — carries the same
+	// background and the band comes out in one piece.
+	if o.Selected && t.sel != nil {
+		return t.sel.Row(c, RowOpts{Width: o.Width, Selected: false, ShowTime: o.ShowTime,
+			Tokens: o.Tokens, LocalHost: o.LocalHost, BaseCwd: o.BaseCwd, Now: o.Now,
+			ReserveHost: o.ReserveHost, ShowAge: o.ShowAge, selected: true})
+	}
 
 	prefix := t.prefix(c, o, o.ShowTime)
 	// On a very narrow terminal the prefix alone can overrun the line. Give up
@@ -73,7 +86,7 @@ func (t *Theme) Row(c store.Command, o RowOpts) string {
 	}
 	prefixW := Width(prefix)
 	if prefixW >= o.Width {
-		return Pad(Truncate(FirstLine(c.Command), o.Width), o.Width)
+		return t.padTo(t.body(Truncate(FirstLine(c.Command), o.Width)), o.Width)
 	}
 
 	// Build the trailing group, then give the command whatever is left. Each
@@ -95,21 +108,18 @@ func (t *Theme) Row(c store.Command, o RowOpts) string {
 
 		text := Truncate(FirstLine(c.Command), cmdW)
 		styled := t.Highlight(text, o.Tokens)
-		if o.Selected {
-			styled = t.Selected.Render(styled)
-		}
 
 		line := prefix + styled
 		if trailingW > 0 {
 			// Padding out to exactly Width-trailingW is what right-aligns the
 			// group, so durations and exit codes line up down the column.
-			line = Pad(line, o.Width-trailingW) + trailing
+			line = t.padTo(line, o.Width-trailingW) + trailing
 		}
-		return Pad(line, o.Width)
+		return t.padTo(line, o.Width)
 	}
 	// Unreachable: the last attempt cannot `continue`. Go cannot see that, and
 	// a function ending in a `for` still needs a return.
-	return Pad(prefix, o.Width)
+	return t.padTo(prefix, o.Width)
 }
 
 // trailing builds the right-hand group. Each successive level drops one more
@@ -133,7 +143,7 @@ func (t *Theme) trailing(c store.Command, o RowOpts, level int) string {
 			host = t.chipInfo.Render(Pad(Truncate(c.Hostname, hostSlot), hostSlot))
 		}
 		if host != "" || o.ReserveHost {
-			parts = append(parts, padLeft(host, hostSlot+2))
+			parts = append(parts, t.padLeft(host, hostSlot+2))
 		}
 	}
 	// Duration and exit code get fixed-width slots, blank-filled when absent.
@@ -152,7 +162,7 @@ func (t *Theme) trailing(c store.Command, o RowOpts, level int) string {
 		case c.Status == store.StatusRunning && o.Now > c.StartTime && c.StartTime > 0:
 			dur = t.chipInfo.Render(Duration(o.Now - c.StartTime))
 		}
-		parts = append(parts, padLeft(dur, durationSlot))
+		parts = append(parts, t.padLeft(dur, durationSlot))
 
 		// The exit code only earns ink when it is not zero: a green tick already
 		// says "exit 0", and a column of zeroes buries the 127 you are looking
@@ -161,25 +171,25 @@ func (t *Theme) trailing(c store.Command, o RowOpts, level int) string {
 		if c.ExitCode != nil && *c.ExitCode != 0 {
 			exit = t.chipExit.Render(strconv.Itoa(*c.ExitCode))
 		}
-		parts = append(parts, padLeft(exit, exitSlot))
+		parts = append(parts, t.padLeft(exit, exitSlot))
 
 		if o.ShowAge && o.Now > 0 {
 			// One column of the slot is margin: the trailing group sits flush
 			// against the frame, and a column of text touching the border reads
 			// as though it has been cut off.
-			parts = append(parts, padLeft(t.Muted.Render(Age(c.StartTime, o.Now)), ageSlot-1)+" ")
+			parts = append(parts, t.padLeft(t.Muted.Render(Age(c.StartTime, o.Now)), ageSlot-1)+t.body(" "))
 		}
 	} else if c.ExitCode != nil && *c.ExitCode != 0 {
 		// Last resort: no room for columns, but a failure still says which one.
 		parts = append(parts, t.chipExit.Render(strconv.Itoa(*c.ExitCode)))
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(parts, t.body(" "))
 }
 
 // padLeft right-aligns a possibly-styled string inside a fixed field.
-func padLeft(s string, w int) string {
+func (t *Theme) padLeft(s string, w int) string {
 	if d := w - Width(s); d > 0 {
-		return strings.Repeat(" ", d) + s
+		return t.body(strings.Repeat(" ", d)) + s
 	}
 	return s
 }
@@ -188,12 +198,12 @@ func padLeft(s string, w int) string {
 func (t *Theme) prefix(c store.Command, o RowOpts, withTime bool) string {
 	// The leading space keeps the selection bar off the picker's frame border,
 	// which otherwise reads as one thick line rather than a cursor.
-	s := "   "
-	if o.Selected {
-		s = " " + t.Accent.Render("▌") + " "
+	s := t.body("   ")
+	if o.selected {
+		s = t.body(" ") + t.Accent.Render("▌") + t.body(" ")
 	}
 	if withTime {
-		s += t.Muted.Render(time.UnixMilli(c.StartTime).Format("15:04:05")) + "  "
+		s += t.Muted.Render(time.UnixMilli(c.StartTime).Format("15:04:05")) + t.body("  ")
 	}
-	return s + t.Mark(c) + "  "
+	return s + t.Mark(c) + t.body("  ")
 }

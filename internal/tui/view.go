@@ -270,9 +270,14 @@ func (m *Model) detailMeta(c store.Command, pw int) []string {
 		}
 	}
 
-	rows := [][2]string{
-		{"host", c.Hostname},
-		{"dir", theme.ShortenPath(c.Cwd)},
+	// Each row only when it has something to say. An imported command carries
+	// no directory, and a label with nothing after it spends a line saying so.
+	var rows [][2]string
+	if c.Hostname != "" {
+		rows = append(rows, [2]string{"host", c.Hostname})
+	}
+	if d := theme.ShortenPath(c.Cwd); d != "" {
+		rows = append(rows, [2]string{"dir", d})
 	}
 	// Only when there is one. A row reading "branch —" spends a line saying
 	// nothing.
