@@ -416,11 +416,13 @@ them as one machine's numbers rather than a benchmark suite.
   a cost one.
 - **fish hooks are written but untested.** bash and zsh are exercised against
   real shells; fish is not.
-- **The GCS backend has not been run against a real bucket.** It is covered by
-  a conformance suite that runs every assertion against both backends, and by a
-  fake that copies the API semantics that matter — `startOffset` is inclusive,
-  listings page — but a fake agrees with whatever you believed when you wrote
-  it. The directory backend is the one with real mileage.
+- **A first sync of a large backlog is slow against GCS.** Cloud Storage caps
+  mutations of one object at roughly one per second, and the manifest is
+  rewritten once per batch of 500 events — so a backlog backs off and retries
+  its way through at about a batch a second. Steady state is one batch per
+  round and never comes near the limit. Writing the manifest once per round
+  would fix it, and is not done yet because doing it safely means reworking
+  when events are marked synced.
 
 
 ## Not yet built

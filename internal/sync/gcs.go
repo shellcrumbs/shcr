@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2/google"
 )
@@ -41,7 +42,22 @@ type GCSStorage struct {
 	client *http.Client
 	// endpoint is the API root. Only tests set it.
 	endpoint string
+	// sleep is time.Sleep, indirected so a retry test does not have to spend the
+	// backoff it is asserting.
+	sleep func(time.Duration)
 }
+
+// retryAttempts bounds how long a single call will keep trying. Cloud Storage
+// caps mutations of one object at roughly one per second, and the manifest is
+// rewritten once per batch — so a first sync with a backlog walks straight into
+// it. Everything here is idempotent (a batch key is unique, the manifest is
+// last-writer-wins) so a retry cannot do damage a first attempt would not.
+const retryAttempts = 6
+
+// retryBase is the first backoff. It doubles per attempt, so six attempts span
+// about eight seconds — comfortably past a per-second limit, and short enough
+// that a genuinely broken bucket still fails inside one sync round.
+const retryBase = 250 * time.Millisecond
 
 // NewGCSStorage resolves Application Default Credentials and returns a backend
 // for the bucket.
@@ -89,6 +105,65 @@ func (g *GCSStorage) http() *http.Client {
 	return http.DefaultClient
 }
 
+// send performs a request, retrying the failures an object store is expected to
+// produce: a rate limit, and the transient 5xx that any large distributed system
+// returns occasionally. The request is rebuilt per attempt so a body can be sent
+// again.
+//
+// Anything else — a missing object, a permission error, a bad bucket — comes
+// straight back. Retrying those only turns a clear error into a slow one.
+func (g *GCSStorage) send(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+	nap := g.sleep
+	if nap == nil {
+		nap = time.Sleep
+	}
+	var lastErr error
+	for attempt := range retryAttempts {
+		if attempt > 0 {
+			wait := retryBase << (attempt - 1)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
+			nap(wait)
+		}
+		req, err := build()
+		if err != nil {
+			return nil, err
+		}
+		resp, err := g.http().Do(req)
+		if err != nil {
+			// A connection that failed mid-flight is worth another go; a
+			// cancelled context is not.
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			lastErr = err
+			continue
+		}
+		if !retryable(resp.StatusCode) {
+			return resp, nil
+		}
+		// The body has to be drained and closed or the connection leaks.
+		lastErr = gcsError(resp, "retryable")
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+	}
+	return nil, fmt.Errorf("gave up after %d attempts: %w", retryAttempts, lastErr)
+}
+
+// retryable is the set worth trying again: the rate limit on mutating one
+// object, and the transient server-side failures.
+func retryable(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, http.StatusInternalServerError,
+		http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
 // name maps a caller's key to the object name in the bucket.
 func (g *GCSStorage) name(key string) string { return g.Prefix + key }
 
@@ -105,11 +180,9 @@ func (g *GCSStorage) Get(ctx context.Context, key string) ([]byte, error) {
 	u := fmt.Sprintf("%s/storage/v1/b/%s/o/%s?alt=media",
 		g.root(), url.PathEscape(g.Bucket), url.PathEscape(g.name(key)))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := g.http().Do(req)
+	resp, err := g.send(ctx, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("gcs get %s: %w", key, err)
 	}
@@ -131,14 +204,15 @@ func (g *GCSStorage) Put(ctx context.Context, key string, data []byte) error {
 	q := url.Values{"uploadType": {"media"}, "name": {g.name(key)}}
 	u := fmt.Sprintf("%s/upload/storage/v1/b/%s/o?%s", g.root(), url.PathEscape(g.Bucket), q.Encode())
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.ContentLength = int64(len(data))
-
-	resp, err := g.http().Do(req)
+	resp, err := g.send(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.ContentLength = int64(len(data))
+		return req, nil
+	})
 	if err != nil {
 		return fmt.Errorf("gcs put %s: %w", key, err)
 	}
@@ -208,11 +282,9 @@ type gcsListPage struct {
 func (g *GCSStorage) eachPage(ctx context.Context, q url.Values, fn func(gcsListPage)) error {
 	for {
 		u := fmt.Sprintf("%s/storage/v1/b/%s/o?%s", g.root(), url.PathEscape(g.Bucket), q.Encode())
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := g.http().Do(req)
+		resp, err := g.send(ctx, func() (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		})
 		if err != nil {
 			return fmt.Errorf("gcs list %s: %w", q.Get("prefix"), err)
 		}

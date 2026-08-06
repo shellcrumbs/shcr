@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeGCS is enough of the Cloud Storage JSON API to hold this backend to its
@@ -406,5 +407,118 @@ func TestNormalisePrefix(t *testing.T) {
 		if got := normalisePrefix(in); got != want {
 			t.Errorf("normalisePrefix(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------- retries
+
+// flaky fails the first `fail` requests with code, then serves normally.
+type flaky struct {
+	inner    http.Handler
+	code     int
+	fail     int
+	attempts int
+}
+
+func (f *flaky) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.attempts++
+	if f.attempts <= f.fail {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(f.code)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{
+			"code": f.code,
+			"message": "The object exceeded the rate limit for object mutation operations " +
+				"(create, update, and delete). Please reduce your request rate.",
+		}})
+		return
+	}
+	f.inner.ServeHTTP(w, r)
+}
+
+// Cloud Storage caps mutations of a single object at about one per second, and
+// the manifest is rewritten once per batch — so the first sync of any real
+// backlog hits it. Observed against a live bucket: eight batches went up, then
+// the ninth manifest write came back 429 and the whole round failed.
+func TestARateLimitedWriteIsRetried(t *testing.T) {
+	f, g, _ := newFakeGCS(t, "shellcrumbs")
+	fk := &flaky{inner: f, code: http.StatusTooManyRequests, fail: 3}
+	srv := httptest.NewServer(fk)
+	defer srv.Close()
+	g.endpoint, g.client = srv.URL, srv.Client()
+
+	var slept []time.Duration
+	g.sleep = func(d time.Duration) { slept = append(slept, d) }
+
+	if err := g.Put(context.Background(), "devices/dev-1/manifest.json", []byte("x")); err != nil {
+		t.Fatalf("gave up on a rate limit that cleared: %v", err)
+	}
+	if got, ok := f.objects["devices/dev-1/manifest.json"]; !ok || string(got) != "x" {
+		t.Errorf("the object never landed: %q %v", got, ok)
+	}
+	// Backing off means waiting longer each time; retrying flat out is just a
+	// faster way to stay rate limited.
+	if len(slept) != 3 {
+		t.Fatalf("slept %v, want three waits", slept)
+	}
+	for i := 1; i < len(slept); i++ {
+		if slept[i] <= slept[i-1] {
+			t.Errorf("backoff did not grow: %v", slept)
+		}
+	}
+}
+
+func TestAPersistentRateLimitEventuallyGivesUp(t *testing.T) {
+	f, g, _ := newFakeGCS(t, "shellcrumbs")
+	fk := &flaky{inner: f, code: http.StatusTooManyRequests, fail: 1000}
+	srv := httptest.NewServer(fk)
+	defer srv.Close()
+	g.endpoint, g.client = srv.URL, srv.Client()
+	g.sleep = func(time.Duration) {}
+
+	err := g.Put(context.Background(), "devices/dev-1/manifest.json", []byte("x"))
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if !strings.Contains(err.Error(), "rate limit") {
+		t.Errorf("the reason is lost: %v", err)
+	}
+	if fk.attempts != retryAttempts {
+		t.Errorf("made %d attempts, want %d", fk.attempts, retryAttempts)
+	}
+}
+
+// A permission error will not fix itself. Retrying it turns a clear message
+// into the same message eight seconds later.
+func TestAPermissionErrorIsNotRetried(t *testing.T) {
+	f, g, _ := newFakeGCS(t, "shellcrumbs")
+	fk := &flaky{inner: f, code: http.StatusForbidden, fail: 1000}
+	srv := httptest.NewServer(fk)
+	defer srv.Close()
+	g.endpoint, g.client = srv.URL, srv.Client()
+	g.sleep = func(d time.Duration) { t.Errorf("backed off for %v on a 403", d) }
+
+	if err := g.Put(context.Background(), "devices/dev-1/manifest.json", []byte("x")); err == nil {
+		t.Fatal("no error")
+	}
+	if fk.attempts != 1 {
+		t.Errorf("made %d attempts at a 403, want 1", fk.attempts)
+	}
+}
+
+// A body has to be re-sent on each attempt, not consumed by the first.
+func TestARetriedUploadSendsItsBodyAgain(t *testing.T) {
+	f, g, _ := newFakeGCS(t, "shellcrumbs")
+	fk := &flaky{inner: f, code: http.StatusServiceUnavailable, fail: 2}
+	srv := httptest.NewServer(fk)
+	defer srv.Close()
+	g.endpoint, g.client = srv.URL, srv.Client()
+	g.sleep = func(time.Duration) {}
+
+	want := []byte("a batch of ciphertext")
+	if err := g.Put(context.Background(), "devices/dev-1/b_001.enc", want); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.objects["devices/dev-1/b_001.enc"]; string(got) != string(want) {
+		t.Errorf("stored %q, want %q — the body was consumed by the first attempt", got, want)
 	}
 }
