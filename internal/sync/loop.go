@@ -82,27 +82,35 @@ func (c LoopConfig) withDefaults() LoopConfig {
 // and the sync happens the moment the window closes. Dropping it would mean the
 // last command before you close a laptop is the one that does not get pushed.
 func (e *Engine) Trigger(t Trigger) {
-	if e.triggers == nil {
-		return
-	}
 	select {
-	case e.triggers <- t:
+	case e.triggerChan() <- t:
 	default:
 		// A trigger is already queued; one sync will cover both.
 	}
 }
 
-// EnableTriggers prepares the trigger channel. Call before Run.
-func (e *Engine) EnableTriggers() {
-	if e.triggers == nil {
-		e.triggers = make(chan Trigger, 1)
-	}
+// EnableTriggers prepares the trigger channel. Run does this itself; calling it
+// first lets a trigger be queued before the loop is running, which is what the
+// daemon does so that coming up is itself a reason to sync.
+func (e *Engine) EnableTriggers() { e.triggerChan() }
+
+// triggerChan returns the trigger channel, creating it exactly once.
+//
+// Once rather than a nil check, because Run calls EnableTriggers itself: a
+// caller that started Run in a goroutine and triggered from another was writing
+// and reading the field at the same time. The daemon happens to create it
+// before either goroutine exists, so the race is real but not currently
+// reachable — which is a property of one call site rather than of the API, and
+// one refactor away from a dropped trigger nobody can reproduce.
+func (e *Engine) triggerChan() chan Trigger {
+	e.triggersOnce.Do(func() { e.triggers = make(chan Trigger, 1) })
+	return e.triggers
 }
 
 // Run drives sync until the context is cancelled.
 func (e *Engine) Run(ctx context.Context, cfg LoopConfig) error {
 	cfg = cfg.withDefaults()
-	e.EnableTriggers()
+	triggers := e.triggerChan()
 
 	var (
 		// lastAttempt governs the floor: failures must not be allowed to
@@ -124,7 +132,7 @@ func (e *Engine) Run(ctx context.Context, cfg LoopConfig) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case t := <-e.triggers:
+		case t := <-triggers:
 			if pending == "" {
 				pending = t
 			}

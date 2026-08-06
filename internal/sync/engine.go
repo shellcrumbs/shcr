@@ -1,6 +1,8 @@
 package sync
 
 import (
+	stdsync "sync"
+
 	"bufio"
 	"bytes"
 	"context"
@@ -67,8 +69,10 @@ type Engine struct {
 	// configured but sync switched off, and pick the switch up while running.
 	Enabled func() bool
 
-	// triggers carries the moments worth syncing on into the loop.
-	triggers chan Trigger
+	// triggers carries the moments worth syncing on into the loop, created once
+	// on first use. See triggerChan.
+	triggers     chan Trigger
+	triggersOnce stdsync.Once
 
 	mu        sync.Mutex
 	keyReady  bool
