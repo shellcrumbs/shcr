@@ -47,6 +47,12 @@ var (
 	// Still a surface rather than a hue, so it sits under the status colours
 	// instead of competing with them.
 	colorSelBG = lipgloss.AdaptiveColor{Light: "#dbe3ec", Dark: "#2d3542"}
+	// The band sets its own foreground rather than letting the command text keep
+	// the terminal's. Unstyled text takes the terminal's default colour, which is
+	// dark on a light terminal — put a dark band under it and the one row you are
+	// looking at becomes the only one you cannot read. Paired with the background
+	// above, so whichever way the polarity is resolved the two agree.
+	colorSelFG = lipgloss.AdaptiveColor{Light: "#12161b", Dark: "#eef3f8"}
 )
 
 type Theme struct {
@@ -120,7 +126,7 @@ func ParseColorMode(s string) (ColorMode, error) {
 // NewWithMode is New with the colour decision overridden.
 func NewWithMode(w io.Writer, mode ColorMode) *Theme {
 	r := lipgloss.NewRenderer(w)
-	r.SetHasDarkBackground(resolveDarkBackground(r))
+	r.SetHasDarkBackground(resolveDarkBackground(w))
 	switch mode {
 	case ColorNever:
 		r.SetColorProfile(termenv.Ascii)
@@ -143,7 +149,7 @@ func build(r *lipgloss.Renderer) *Theme {
 func buildOn(r *lipgloss.Renderer, bg lipgloss.TerminalColor) *Theme {
 	base := r.NewStyle()
 	if bg != nil {
-		base = base.Background(bg)
+		base = base.Background(bg).Foreground(colorSelFG)
 	}
 	// On a selected row the chip keeps its shape but not its own surface: a
 	// second tint inside the band reads as a hole punched in it.
@@ -191,17 +197,13 @@ func (t *Theme) padTo(s string, w int) string {
 }
 
 // resolveDarkBackground prefers an explicit setting, then the COLORFGBG hint
-// many terminals export, and otherwise assumes dark — which is what developer
-// terminals overwhelmingly are.
-func resolveDarkBackground(r *lipgloss.Renderer) bool {
+// many terminals export, then the terminal itself, and only then a guess.
+func resolveDarkBackground(w io.Writer) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("SHCR_THEME"))) {
 	case "light":
 		return false
 	case "dark":
 		return true
-	case "auto":
-		// Explicitly opted into the query, with its timeout, at the caller's risk.
-		return r.HasDarkBackground()
 	}
 	if fgbg := os.Getenv("COLORFGBG"); fgbg != "" {
 		if fields := strings.Split(fgbg, ";"); len(fields) >= 2 {
@@ -212,6 +214,20 @@ func resolveDarkBackground(r *lipgloss.Renderer) bool {
 			}
 		}
 	}
+
+	// Nothing has said, so ask the terminal itself, on a budget. This runs
+	// before Bubble Tea acquires the terminal — the window its own init() exists
+	// to create — and gives up after backgroundBudget rather than termenv's five
+	// second constant. See queryDarkBackground for why guessing stopped being
+	// good enough.
+	if f, isFile := w.(*os.File); isFile {
+		if dark, ok := queryDarkBackground(f, backgroundBudget); ok {
+			return dark
+		}
+	}
+	// Unanswered. Developer terminals are overwhelmingly dark, and the selected
+	// row carries its own foreground, so a wrong guess here is a band of the
+	// wrong shade rather than one that cannot be read.
 	return true
 }
 

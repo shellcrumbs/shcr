@@ -2,7 +2,9 @@ package theme
 
 import (
 	"bytes"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -171,5 +173,79 @@ func TestWrapHonoursMaxLines(t *testing.T) {
 	got := Wrap(strings.Repeat("word ", 100), 20, 3)
 	if len(got) != 3 {
 		t.Errorf("got %d lines, want 3", len(got))
+	}
+}
+
+func TestParseOSC11(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		dark bool
+		ok   bool
+	}{
+		{"\x1b]11;rgb:1e1e/1e1e/1e1e\a", true, true},
+		{"\x1b]11;rgb:fdfd/f6f6/e3e3\x1b\\", false, true}, // a cream terminal
+		{"\x1b]11;rgb:ff/ff/ff\a", false, true},           // 8-bit components
+		{"\x1b]11;rgb:0/0/0\a", true, true},               // 4-bit components
+		{"\x1b]11;rgb:1e1e/1e1e\a", false, false},         // short
+		{"", false, false},
+		{"garbage", false, false},
+	} {
+		dark, ok := parseOSC11(tc.in)
+		if dark != tc.dark || ok != tc.ok {
+			t.Errorf("%q -> dark=%v ok=%v, want dark=%v ok=%v", tc.in, dark, ok, tc.dark, tc.ok)
+		}
+	}
+}
+
+// luminance and contrast implement WCAG 2.1, which is the only non-negotiable
+// thing about a colour pair: whatever the band looks like, the text on it has
+// to be legible.
+func luminance(hex string) float64 {
+	ch := func(s string) float64 {
+		v, _ := strconv.ParseUint(s, 16, 32)
+		c := float64(v) / 255
+		if c <= 0.03928 {
+			return c / 12.92
+		}
+		return math.Pow((c+0.055)/1.055, 2.4)
+	}
+	h := strings.TrimPrefix(hex, "#")
+	return 0.2126*ch(h[0:2]) + 0.7152*ch(h[2:4]) + 0.0722*ch(h[4:6])
+}
+
+func contrast(a, b string) float64 {
+	la, lb := luminance(a), luminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+// The band paints its own background, so it has to bring its own foreground.
+// The pair has to be legible in both resolutions — including the one reached by
+// guessing wrong, which is the case that produced a dark band under dark text.
+func TestTheBandsTextIsLegibleOnIt(t *testing.T) {
+	for _, tc := range []struct{ mode, bg, fg string }{
+		{"light", colorSelBG.Light, colorSelFG.Light},
+		{"dark", colorSelBG.Dark, colorSelFG.Dark},
+	} {
+		if got := contrast(tc.bg, tc.fg); got < 4.5 {
+			t.Errorf("%s band: %s on %s is %.1f:1, want at least 4.5:1", tc.mode, tc.fg, tc.bg, got)
+		}
+	}
+	// And the status colours still have to read against the band, since that is
+	// the row whose result you are looking at.
+	for _, tc := range []struct {
+		mode, bg string
+		fg       []string
+	}{
+		{"light", colorSelBG.Light, []string{colorFailed.Light, colorCompleted.Light, colorRunning.Light, colorMuted.Light}},
+		{"dark", colorSelBG.Dark, []string{colorFailed.Dark, colorCompleted.Dark, colorRunning.Dark, colorMuted.Dark}},
+	} {
+		for _, fg := range tc.fg {
+			if got := contrast(tc.bg, fg); got < 3 {
+				t.Errorf("%s band: %s on %s is %.1f:1, want at least 3:1", tc.mode, fg, tc.bg, got)
+			}
+		}
 	}
 }
