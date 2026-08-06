@@ -46,9 +46,15 @@ type Sync struct {
 	// Prefix optionally nests everything under a folder inside that bucket, so
 	// one bucket can hold more than shcr.
 	Prefix string `json:"prefix,omitempty"`
-	// ShareHostname puts a hostname hint in the manifest, which the storage
-	// provider can read. Off by default.
-	ShareHostname bool `json:"share_hostname"`
+	// HideHostname keeps this machine's name out of the manifest.
+	//
+	// Inverted deliberately, so that the zero value shares. A device id is a
+	// UUID, and a list of UUIDs tells you nothing about which machine is which —
+	// the hostname is what makes `shcr sync status` and the dashboard's peer
+	// list legible. It is a machine name in an object only the holder of the key
+	// can otherwise make sense of, so sharing is the better default and this is
+	// the way out.
+	HideHostname bool `json:"hide_hostname,omitempty"`
 }
 
 func Path() string { return filepath.Join(paths.DataDir(), "config.json") }

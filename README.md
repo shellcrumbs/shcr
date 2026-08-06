@@ -203,9 +203,23 @@ shcr sync now                       # or let the daemon do it
 shcr sync status
 ```
 
-The bucket only ever holds ciphertext — XChaCha20-Poly1305, a fresh nonce per
-batch. The key never leaves the machines it is on. Losing the phrase means losing
-access to everything already uploaded, and nobody can recover it for you.
+Every command you have ever run goes up as ciphertext — XChaCha20-Poly1305, a
+fresh nonce per batch. The key never leaves the machines it is on. Losing the
+phrase means losing access to everything already uploaded, and nobody can
+recover it for you.
+
+One object is **not** encrypted: each device writes a small `manifest.json`
+naming its most recent batch, so a peer can tell there is something new without
+listing the whole prefix. It holds that batch's key, a timestamp, and the
+machine's hostname. No command text, ever.
+
+The key and the timestamp amount to when you last synced, which the provider can
+already see from the objects' own creation times, so encrypting them would buy
+close to nothing. The hostname is the part that genuinely tells them something,
+and it is there because the alternative is worse to use: a device id is a UUID,
+and `shcr sync status` listing four UUIDs cannot tell you which one is the
+laptop you are trying to find. Pass `--no-share-hostname` to keep it out — the
+manifest simply omits the field, and peers show that device as `(unnamed)`.
 
 **Backends.** Two. `--dir` treats a directory as the bucket, which covers a NAS
 mount, a synced folder or an `rclone mount`. `--bucket` uses Google Cloud
@@ -357,7 +371,9 @@ Two things it does **not** protect against. `shcr web --open` hands the token to
 the browser launcher, where it is visible in that process's arguments and
 afterwards in browser history — on a shared machine, run plain `shcr web` and
 paste the URL yourself. And the storage provider still sees object sizes,
-timestamps and how many machines you have, even though it cannot read contents.
+timestamps, how many machines you have, and the contents of each device's
+`manifest.json` — see [Syncing another machine](#syncing-another-machine) for
+what that does and does not contain. No command text is ever readable to them.
 
 
 ## What it costs

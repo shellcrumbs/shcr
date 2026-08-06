@@ -234,7 +234,7 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		SyncEnabled:   cfg.Sync.Enabled,
 		SyncBackend:   cfg.Sync.Backend,
 		SyncPath:      cfg.Sync.Path,
-		ShareHostname: cfg.Sync.ShareHostname,
+		ShareHostname: !cfg.Sync.HideHostname,
 		// Read from the configuration as it stands, not from whether a sync
 		// function happened to be wired up when the server started.
 		SyncAvailable: s.Sync != nil && cfg.Sync.Backend != "",
@@ -266,7 +266,9 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		cfg.Sync.Enabled = *patch.SyncEnabled
 	}
 	if patch.ShareHostname != nil {
-		cfg.Sync.ShareHostname = *patch.ShareHostname
+		// The API keeps the positive sense: a toggle labelled "share" reads
+		// better than one labelled "hide", whichever way the config stores it.
+		cfg.Sync.HideHostname = !*patch.ShareHostname
 	}
 	if err := config.Save(cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

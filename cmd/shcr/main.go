@@ -490,7 +490,7 @@ func syncEngineWith(st *store.Store) (*syncengine.Engine, error) {
 		// the keyring is unlocked.
 		KeyFunc:  func() (crypto.Key, error) { k, _, err := ks.Load(); return k, err },
 		DeviceID: deviceID, Hostname: host,
-		ShareHostname: cfg.Sync.ShareHostname,
+		ShareHostname: !cfg.Sync.HideHostname,
 		Logger:        log.New(os.Stderr, "shcr: ", 0),
 	}, nil
 }
@@ -505,7 +505,7 @@ func cmdSync(args []string) error {
 		dir := fs.String("dir", "", "directory to use as the bucket")
 		bucket := fs.String("bucket", "", "Google Cloud Storage bucket to use instead of a directory")
 		prefix := fs.String("prefix", "", "folder inside the bucket, so one bucket can hold more than shcr")
-		shareHost := fs.Bool("share-hostname", false, "put a hostname hint in the manifest (visible to the storage provider)")
+		hideHost := fs.Bool("no-share-hostname", false, "keep this machine's name out of the manifest (it is shared by default, so peers are legible)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -523,7 +523,7 @@ func cmdSync(args []string) error {
 		if err != nil {
 			return err
 		}
-		cfg.Sync = config.Sync{Enabled: true, ShareHostname: *shareHost}
+		cfg.Sync = config.Sync{Enabled: true, HideHostname: *hideHost}
 		var where string
 		if *bucket != "" {
 			cfg.Sync.Backend, cfg.Sync.Bucket, cfg.Sync.Prefix = "gcs", *bucket, *prefix
@@ -583,9 +583,14 @@ func cmdSync(args []string) error {
 		default:
 			backend = cfg.Sync.Backend + " backend"
 		}
+		hostname := "shared, so peers can tell which machine is which"
+		if cfg.Sync.HideHostname {
+			hostname = "not shared"
+		}
 		for _, row := range [][2]string{
 			{"sync", backend},
 			{"device", deviceID + " (this machine)"},
+			{"hostname", hostname},
 			{"pending", fmt.Sprintf("%d event(s) waiting to upload", pending)},
 		} {
 			fmt.Printf("%s  %s\n", th.Label.Render(fmt.Sprintf("%-8s", row[0])), row[1])
