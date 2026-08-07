@@ -84,7 +84,8 @@ flags. The rest are subcommand-only and have none; `shcr help` lists them all.
 
 ## Everyday use
 
-Press **Ctrl+R** for the picker. Type to filter, `↑↓` and `PgUp`/`PgDn` to move,
+Press **Ctrl+R** for the picker. Type to filter, `↑↓`, `PgUp`/`PgDn` and the
+mouse wheel to move,
 `⏎` to put the command in your prompt — **editable and unexecuted**: Enter in the
 picker inserts, it does not run. `^Y` copies, `^F` cycles the status filter
 (all → running → failed → orphaned), `esc` cancels.
@@ -123,6 +124,11 @@ renderer. Metadata appears as chips only when it has something to say:
 Colour turns itself off when piped or redirected and honours `NO_COLOR`.
 `--color always` forces it back for `| less -R`; `SHCR_THEME=light` suits a light
 terminal.
+
+Redirected output is not truncated either. Rows are fitted to the terminal when
+there is one, and written at their natural length when there is not — so
+`shcr list | grep` and `shcr list > history.txt` keep whole commands rather than
+whatever fitted in a guessed 100 columns.
 
 
 ## How the picker orders results
@@ -208,6 +214,10 @@ shcr sync now                       # or let the daemon do it
 shcr sync status
 ```
 
+The phrase travels on paper and nowhere else — it is what decrypts the bucket,
+so it cannot go through it. `shcr key init` and `shcr key show --reveal` both
+refuse to run with their output redirected for the same reason.
+
 Every command you have ever run goes up as ciphertext — XChaCha20-Poly1305, a
 fresh nonce per batch. The key never leaves the machines it is on. Losing the
 phrase means losing access to everything already uploaded, and nobody can
@@ -228,24 +238,17 @@ manifest simply omits the field, and peers show that device as `(unnamed)`.
 
 **Backends.** Two. `--dir` treats a directory as the bucket, which covers a NAS
 mount, a synced folder or an `rclone mount`. `--bucket` uses Google Cloud
-Storage:
+Storage, with credentials from Application Default Credentials so shcr never
+holds one of its own:
 
 ```sh
 shcr sync enable --bucket my-bucket --prefix shcr   # --prefix is optional
 ```
 
-Credentials come from Application Default Credentials, so
-`gcloud auth application-default login` or a service account key in
-`GOOGLE_APPLICATION_CREDENTIALS` both work, and shcr never holds a credential of
-its own. The service account needs **Storage Object Admin** on the bucket and
-nothing more. Either way the bucket only ever holds ciphertext.
-
-Standard storage class is the one to pick: shcr writes many small objects and
-never deletes them, so Autoclass's per-object management fee outgrows the
-storage it saves, and the colder classes charge retrieval exactly when a rebuilt
-machine pulls its whole history back.
-
-There is no S3 or R2 backend yet — see [Not yet built](#not-yet-built).
+**[docs/sync.md](docs/sync.md)** has the rest: which storage class to choose and
+why, the IAM role that is actually needed, the step-by-step for putting a second
+machine on the same history, and what each error means. There is no S3 or R2
+backend yet — see [Not yet built](#not-yet-built).
 
 **When syncing happens.** Two bounds and a set of triggers, rather than a
 polling interval:
@@ -405,13 +408,16 @@ them as one machine's numbers rather than a benchmark suite.
 
 ## Known limits
 
-- **Startup pays a terminal query.** Bubble Tea, which the picker is built on,
-  queries the terminal for its background colour from a package `init()` — so
-  every `shcr` command does it, whether or not it draws anything. Terminals
-  answer in about a millisecond. One that does *not* answer costs a five-second
-  stall before any output. `tmux`, `screen` and `TERM=dumb` are skipped, `CI` is
-  skipped, and piped or redirected output is skipped; a bare pty is not, which
-  is worth knowing before scripting `shcr` under one.
+- **Startup asks the terminal what colour it is.** Twice, for different reasons.
+  shcr asks so the selected row's highlight is the right shade, on a 150ms
+  budget, and skips it entirely for `tmux`, `screen`, `TERM=dumb`, `CI` and
+  anything that is not a terminal. Bubble Tea, which the picker is built on,
+  asks from a package `init()` with a five-second timeout that cannot be
+  lowered — and because it runs at process start, *every* `shcr` command pays
+  it, whether or not it draws anything. Terminals answer in about a
+  millisecond. One that does not answer costs Bubble Tea's five seconds before
+  any output. Its own skips are the same set; a bare pty is not among them,
+  which is worth knowing before scripting `shcr` under one.
 - **`shcr list -q` matches tokens and prefixes; the picker also matches
   subsequences.** In the picker `gitpsh` finds `git push`. `shcr list -q` goes
   through SQLite's full-text index, where it does not: `-q "npm run"` and
