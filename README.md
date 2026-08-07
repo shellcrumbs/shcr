@@ -86,8 +86,13 @@ flags. The rest are subcommand-only and have none; `shcr help` lists them all.
 
 Press **Ctrl+R** for the picker. Type to filter, `↑↓` and `PgUp`/`PgDn` to move,
 `⏎` to put the command in your prompt — **editable and unexecuted**: Enter in the
-picker inserts, it does not run. `^Y` copies, `^U` clears what you have typed,
-`^F` cycles the status filter (all → running → failed → orphaned), `esc` cancels.
+picker inserts, it does not run. `^Y` copies, `^F` cycles the status filter
+(all → running → failed → orphaned), `esc` cancels.
+
+The query line edits like a shell prompt: `←→` move, `Home`/`End` or `^A`/`^E`
+jump to either end, `^W` deletes the word behind the cursor, `^U` clears back to
+the start and `^K` to the end. Typing and backspace act where the cursor is, not
+at the end of the line.
 
 The picker is `shcr tui`; it prints the chosen command to stdout and nothing
 else. `SHCR_NO_BIND=1` before the `eval` keeps your own Ctrl+R binding, and you

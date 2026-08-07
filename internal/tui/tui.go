@@ -48,7 +48,9 @@ type Model struct {
 	// localHost suppresses the host chip for commands that ran on this machine.
 	localHost string
 
-	query     string
+	query string
+	// caret is where the next character goes, as a rune index into query.
+	caret     int
 	results   []store.Command
 	cursor    int
 	offset    int
@@ -108,7 +110,7 @@ func New(st *store.Store, th *theme.Theme, initialQuery string) *Model {
 	host, _ := os.Hostname()
 	m := &Model{
 		store: st, theme: th, localHost: host,
-		query: initialQuery, width: 80, height: 24,
+		query: initialQuery, caret: len([]rune(initialQuery)), width: 80, height: 24,
 	}
 	cwd, _ := os.Getwd()
 	m.where = store.Where{
@@ -128,6 +130,52 @@ func New(st *store.Store, th *theme.Theme, initialQuery string) *Model {
 	}
 	m.indexStats()
 	return m
+}
+
+// editQuery applies an edit to the query and re-runs the search.
+//
+// Every edit goes through here so the caret, the list position and the query
+// can never disagree: an edit that moved the text without moving the caret
+// would put the block cursor over the wrong character, and one that left the
+// list scrolled would show results for the previous query.
+func (m *Model) editQuery(edit func([]rune) ([]rune, int)) tea.Cmd {
+	before := m.query
+	r, caret := edit([]rune(m.query))
+	m.query = string(r)
+	m.caret = max(0, min(caret, len(r)))
+	if m.query == before {
+		return nil
+	}
+	m.cursor, m.offset = 0, 0
+	return m.runQuery()
+}
+
+// insert puts text at the caret and leaves the caret after it.
+func (m *Model) insert(text string) func([]rune) ([]rune, int) {
+	return func(r []rune) ([]rune, int) {
+		ins := []rune(text)
+		out := make([]rune, 0, len(r)+len(ins))
+		out = append(out, r[:m.caret]...)
+		out = append(out, ins...)
+		out = append(out, r[m.caret:]...)
+		return out, m.caret + len(ins)
+	}
+}
+
+// deleteWordBefore removes the word to the left of the caret, the way ^W does
+// in a shell: any run of spaces first, then everything back to the space before
+// that. Deleting one term of a query is the common correction.
+func (m *Model) deleteWordBefore() func([]rune) ([]rune, int) {
+	return func(r []rune) ([]rune, int) {
+		i := m.caret
+		for i > 0 && r[i-1] == ' ' {
+			i--
+		}
+		for i > 0 && r[i-1] != ' ' {
+			i--
+		}
+		return append(append([]rune{}, r[:i]...), r[m.caret:]...), i
+	}
 }
 
 // indexStats makes the per-command history reachable by name, so the detail
@@ -276,30 +324,64 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "ctrl+u":
-		m.query = ""
-		m.cursor, m.offset = 0, 0
-		return m, m.runQuery()
-
-	case "backspace":
-		if m.query != "" {
-			r := []rune(m.query)
-			m.query = string(r[:len(r)-1])
-			m.cursor, m.offset = 0, 0
-			return m, m.runQuery()
+	case "left":
+		if m.caret > 0 {
+			m.caret--
 		}
 		return m, nil
+
+	case "right":
+		if m.caret < len([]rune(m.query)) {
+			m.caret++
+		}
+		return m, nil
+
+	case "home", "ctrl+a":
+		m.caret = 0
+		return m, nil
+
+	case "end", "ctrl+e":
+		m.caret = len([]rune(m.query))
+		return m, nil
+
+	case "ctrl+w", "alt+backspace":
+		return m, m.editQuery(m.deleteWordBefore())
+
+	case "ctrl+k":
+		return m, m.editQuery(func(r []rune) ([]rune, int) {
+			return r[:m.caret], m.caret
+		})
+
+	case "ctrl+u":
+		return m, m.editQuery(func(r []rune) ([]rune, int) {
+			// The shell reading of ^U is "clear to the start of the line", which
+			// is the same thing when the caret is at the end and more useful
+			// when it is not.
+			return r[m.caret:], 0
+		})
+
+	case "delete":
+		return m, m.editQuery(func(r []rune) ([]rune, int) {
+			if m.caret >= len(r) {
+				return r, m.caret
+			}
+			return append(append([]rune{}, r[:m.caret]...), r[m.caret+1:]...), m.caret
+		})
+
+	case "backspace":
+		return m, m.editQuery(func(r []rune) ([]rune, int) {
+			if m.caret == 0 {
+				return r, 0
+			}
+			return append(append([]rune{}, r[:m.caret-1]...), r[m.caret:]...), m.caret - 1
+		})
 	}
 
 	if msg.Type == tea.KeyRunes {
-		m.query += string(msg.Runes)
-		m.cursor, m.offset = 0, 0
-		return m, m.runQuery()
+		return m, m.editQuery(m.insert(string(msg.Runes)))
 	}
 	if msg.Type == tea.KeySpace {
-		m.query += " "
-		m.cursor, m.offset = 0, 0
-		return m, m.runQuery()
+		return m, m.editQuery(m.insert(" "))
 	}
 	return m, nil
 }

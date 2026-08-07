@@ -106,8 +106,21 @@ func (m *Model) renderTop(inner int) string {
 }
 
 func (m *Model) renderQuery(inner int) string {
-	line := " " + m.theme.Title.Render("❯ ") +
-		theme.Truncate(m.query, inner-4) + m.theme.Match.Render("▊")
+	// The block sits on the character it is in front of, rather than always at
+	// the end: with the caret movable, drawing it at the end would say the
+	// text is being appended to when it is being edited in the middle.
+	r := []rune(theme.Truncate(m.query, inner-4))
+	caret := max(0, min(m.caret, len(r)))
+	var typed string
+	switch {
+	case caret >= len(r):
+		typed = string(r) + m.theme.Match.Render("▊")
+	default:
+		typed = string(r[:caret]) +
+			m.theme.Cursor.Render(string(r[caret])) +
+			string(r[caret+1:])
+	}
+	line := " " + m.theme.Title.Render("❯ ") + typed
 	return m.theme.Frame.Render("│") + theme.Pad(line, inner) + m.theme.Frame.Render("│")
 }
 

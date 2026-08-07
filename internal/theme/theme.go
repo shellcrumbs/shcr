@@ -79,7 +79,10 @@ type Theme struct {
 	Match    lipgloss.Style
 	Selected lipgloss.Style
 	Label    lipgloss.Style
-	Error    lipgloss.Style
+	// Cursor draws the character the caret is sitting on, by swapping it with
+	// the background so the block reads as a cursor rather than a highlight.
+	Cursor lipgloss.Style
+	Error  lipgloss.Style
 
 	// chipInfo is worn by the host and duration chips alike: neutral text on
 	// the chip surface. Only the exit code gets a colour of its own.
@@ -170,6 +173,7 @@ func buildOn(r *lipgloss.Renderer, bg lipgloss.TerminalColor) *Theme {
 		Match:    base.Foreground(colorAccent).Bold(true),
 		Selected: base.Bold(true),
 		Label:    base.Foreground(colorMuted),
+		Cursor:   base.Reverse(true),
 		Error:    base.Foreground(colorFailed).Bold(true),
 
 		chipInfo: chip.Foreground(colorChipFG),
