@@ -860,8 +860,12 @@ func cmdRank(args []string) error {
 		}
 		for _, row := range [][2]string{
 			{"searches", fmt.Sprintf("%d", m.Searches)},
-			{"already 1st", fmt.Sprintf("%.0f%%", 100*m.TopOne)},
-			{"in top 3", fmt.Sprintf("%.0f%%", 100*m.TopThree)},
+			// One decimal, because this exists to answer whether a change to
+			// the ordering helped. Rounded to whole percent, moving from 84.1
+			// to 84.8 reads as no change at all, which is the one thing the
+			// number must not do.
+			{"already 1st", fmt.Sprintf("%.1f%%", 100*m.TopOne)},
+			{"in top 3", fmt.Sprintf("%.1f%%", 100*m.TopThree)},
 			{"MRR", fmt.Sprintf("%.3f", m.MRR)},
 			{"median rank", fmt.Sprintf("%d", m.MedianRank)},
 		} {
