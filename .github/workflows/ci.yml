@@ -4,14 +4,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  # So a run can be started by hand. GitHub does not backfill the pushes it
+  # missed during an incident, which left a run of commits on main that CI had
+  # never seen and no way to ask for one short of an empty commit.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A new push makes the run in progress irrelevant.
+# On a pull request a new push makes the run in progress irrelevant. On main it
+# does not: cancelling there means a burst of commits reports the slowest job —
+# the race detector — as "cancelled", which the API calls a failed run and the
+# README badge shows as red. Twice today that was mistaken for a real failure.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
