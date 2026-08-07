@@ -37,9 +37,41 @@ func (m *Model) paneWidths() (left, right int) {
 	return inner - right - 1, right
 }
 
+// minFrameWidth and minFrameHeight are the smallest frame worth drawing: below
+// them the borders and the prompt leave no room for a command.
+const (
+	minFrameWidth  = 24
+	minFrameHeight = 8
+)
+
+// renderTooSmall fills the screen rather than printing a bare line into it.
+// Bubble Tea diffs frames, so a message shorter than the last frame leaves the
+// remains of that frame around it — which on a window being dragged looks like
+// the picker has broken rather than that it wants more room.
+func (m *Model) renderTooSmall() string {
+	w, h := max(m.width, 1), max(m.height, 1)
+	msg := theme.Truncate(fmt.Sprintf("needs %d×%d", minFrameWidth, minFrameHeight), w)
+
+	var b strings.Builder
+	for row := range h {
+		if row > 0 {
+			b.WriteByte('\n')
+		}
+		if row != h/2 {
+			b.WriteString(strings.Repeat(" ", w))
+			continue
+		}
+		pad := (w - theme.Width(msg)) / 2
+		b.WriteString(strings.Repeat(" ", pad))
+		b.WriteString(m.theme.Muted.Render(msg))
+		b.WriteString(strings.Repeat(" ", w-pad-theme.Width(msg)))
+	}
+	return b.String()
+}
+
 func (m *Model) View() string {
-	if m.width < 24 || m.height < 8 {
-		return "terminal too small"
+	if m.width < minFrameWidth || m.height < minFrameHeight {
+		return m.renderTooSmall()
 	}
 	inner := m.width - 2
 	leftW, rightW := m.paneWidths()

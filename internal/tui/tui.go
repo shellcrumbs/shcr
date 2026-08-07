@@ -24,7 +24,19 @@ import (
 
 // Below this many columns the detail pane is dropped entirely rather than
 // squeezed — a cramped two-pane layout reads worse than a clean list.
-const minSplitWidth = 100
+// wheelLines is how far one notch of the wheel moves. Three is what terminals
+// and pagers use, and matching it is what makes the picker feel like the rest
+// of the screen rather than a thing with its own physics.
+const wheelLines = 3
+
+// minSplitWidth is the width below which the detail pane is dropped and the
+// list gets the whole frame.
+//
+// 80 rather than 100: a terminal at 90 columns is common, and collapsing there
+// left half the frame empty rather than showing a narrower pane. The detail
+// pane's own content — a label and a hostname — fits in the low thirties, so a
+// 45% share of 80 is still enough to be worth having.
+const minSplitWidth = 80
 
 // maxDetailWidth is all the detail pane can use. Its longest real line is a
 // label and a hostname; the rest of the terminal belongs to the command text.
@@ -239,6 +251,17 @@ func (m *Model) loadNeighbors(c store.Command) tea.Cmd {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.move(-wheelLines)
+			return m, m.neighborCmd()
+		case tea.MouseButtonWheelDown:
+			m.move(wheelLines)
+			return m, m.neighborCmd()
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
@@ -494,6 +517,11 @@ func Run(st *store.Store, initialQuery string) (string, error) {
 		tea.WithInput(tty),
 		tea.WithOutput(tty),
 		tea.WithAltScreen(),
+		// Wheel scrolling. It costs the terminal's own click-drag selection
+		// while the picker is up, which is a fair trade for a list you scroll:
+		// ^Y already copies the selected command, and the picker is gone a
+		// moment later.
+		tea.WithMouseCellMotion(),
 	)
 	final, err := p.Run()
 	if err != nil {

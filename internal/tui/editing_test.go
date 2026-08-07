@@ -1,9 +1,14 @@
 package tui
 
 import (
+	"io"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/shellcrumbs/shcr/internal/store"
+	"github.com/shellcrumbs/shcr/internal/theme"
 )
 
 // The picker is where you fix a typo in a command you half-remember, so the
@@ -114,4 +119,49 @@ func keyMsg(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: t}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+}
+
+// The wheel moves the selection, because a list you can see is a list you
+// expect to be able to scroll.
+func TestTheWheelMovesTheSelection(t *testing.T) {
+	m := New(nil, nil, "")
+	m.results = make([]store.Command, 50)
+	for i := range m.results {
+		m.results[i] = store.Command{ID: string(rune('a' + i%26)), Command: "c"}
+	}
+	m.height, m.width = 24, 100
+
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown})
+	if m.cursor != wheelLines {
+		t.Errorf("wheel down moved to %d, want %d", m.cursor, wheelLines)
+	}
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	if m.cursor != 0 {
+		t.Errorf("wheel up moved to %d, want 0", m.cursor)
+	}
+	// And it stops at the ends rather than running off them.
+	m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
+	if m.cursor != 0 {
+		t.Errorf("wheel up past the top moved to %d", m.cursor)
+	}
+}
+
+// A window too small to draw in gets a frame of its own, not a bare line left
+// sitting in the remains of the previous one.
+func TestTheTooSmallMessageFillsTheScreen(t *testing.T) {
+	m := New(nil, theme.New(io.Discard), "")
+	m.width, m.height = 20, 6
+	out := m.View()
+	lines := strings.Split(out, "\n")
+	if len(lines) != 6 {
+		t.Fatalf("drew %d lines into a 6-row terminal", len(lines))
+	}
+	for i, l := range lines {
+		if w := theme.Width(l); w != 20 {
+			t.Errorf("line %d is %d columns, want 20: %q", i, w, l)
+		}
+	}
+	if !strings.Contains(out, "24") {
+		t.Errorf("the message does not say what it needs: %q", out)
+	}
 }
