@@ -45,7 +45,10 @@ const commandEnvVar = "SHCR_COMMAND"
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		// No command is a usage error, so it goes to stderr with a non-zero
+		// status. Asking for help is not, and goes to stdout — see the `help`
+		// case below.
+		usage(os.Stderr)
 		os.Exit(2)
 	}
 	var err error
@@ -87,10 +90,12 @@ func main() {
 	case "version", "--version", "-v":
 		fmt.Println(versionString())
 	case "help", "--help", "-h":
-		usage()
+		// Asked for, so it is the output of a successful command: stdout, exit
+		// zero, and `shcr --help | less` works without redirecting stderr.
+		usage(os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "shcr: unknown command %q\n\n", os.Args[1])
-		usage()
+		usage(os.Stderr)
 		os.Exit(2)
 	}
 	if err != nil {
@@ -100,8 +105,8 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `shellcrumbs — shell history that knows what is still running
+func usage(w io.Writer) {
+	fmt.Fprint(w, `shellcrumbs — shell history that knows what is still running
 
 usage: shcr <command> [flags]
 
