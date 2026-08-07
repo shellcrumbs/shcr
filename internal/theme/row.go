@@ -35,6 +35,13 @@ type RowOpts struct {
 	// use it. Without it the command text ends at a different column on every
 	// row, because the slot is as wide as that row's hostname.
 	ReserveHost bool
+	// Unpadded renders the row at its natural width: the command is not cut and
+	// the line is not padded out to Width. It is what `shcr list` uses when its
+	// output is not a terminal — a pipe has no width to fit into, and grepping
+	// for a long command should not fail because the row was trimmed to a
+	// guessed 100 columns.
+	Unpadded bool
+
 	// ShowAge puts how long ago the command ran at the end of the row. The
 	// picker wants it — with no clock column, two similar commands are told
 	// apart by when they ran. `shcr list` already prints the time itself.
@@ -75,6 +82,17 @@ func (t *Theme) Row(c store.Command, o RowOpts) string {
 		return t.sel.Row(c, RowOpts{Width: o.Width, Selected: false, ShowTime: o.ShowTime,
 			Tokens: o.Tokens, LocalHost: o.LocalHost, BaseCwd: o.BaseCwd, Now: o.Now,
 			ReserveHost: o.ReserveHost, ShowAge: o.ShowAge, selected: true})
+	}
+
+	if o.Unpadded {
+		line := t.prefix(c, o, o.ShowTime) + t.Highlight(FirstLine(c.Command), o.Tokens)
+		// One gap rather than an aligned column: there is no width to align
+		// within, and padding out to one would put the metadata hundreds of
+		// columns away from the command it belongs to.
+		if tr := strings.TrimSpace(t.trailing(c, o, 0)); tr != "" {
+			line += "  " + tr
+		}
+		return line
 	}
 
 	prefix := t.prefix(c, o, o.ShowTime)

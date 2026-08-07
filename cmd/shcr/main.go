@@ -1158,7 +1158,11 @@ func cmdList(args []string) error {
 	localHost, _ := os.Hostname()
 	baseCwd, _ := os.Getwd()
 	opts := theme.RowOpts{
-		Width:     terminalWidth(),
+		Width: terminalWidth(),
+		// A pipe or a file has no width to fit into. Cutting the command to a
+		// guessed 100 columns there makes the output lossy for the two things
+		// anyone redirects it for: searching it, and keeping it.
+		Unpadded:  !term.IsTerminal(int(os.Stdout.Fd())),
 		ShowTime:  true,
 		Tokens:    theme.Tokens(*query),
 		LocalHost: localHost,

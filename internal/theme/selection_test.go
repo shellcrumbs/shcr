@@ -249,3 +249,31 @@ func TestTheBandsTextIsLegibleOnIt(t *testing.T) {
 		}
 	}
 }
+
+// Redirected output has no width to fit into, so the command has to survive
+// whole: `shcr list | grep` on a long command should find it.
+func TestAnUnpaddedRowKeepsTheWholeCommand(t *testing.T) {
+	th := colourTheme(t)
+	long := "docker run --rm -v /very/long/path/that/keeps/going:/mnt " +
+		"--env SOMETHING=else --entrypoint /bin/sh image:tag -c 'echo hello world'"
+	c := sampleCommand()
+	c.Command = long
+
+	line := th.Row(c, RowOpts{Width: 100, Unpadded: true, LocalHost: "laptop"})
+	if !strings.Contains(line, long) {
+		t.Errorf("the command was cut:\n %q", line)
+	}
+	if strings.Contains(line, "…") {
+		t.Errorf("an ellipsis survived into unpadded output: %q", line)
+	}
+	// And no run of padding: the metadata sits next to the command, not at
+	// column 100.
+	if strings.Contains(line, "     ") {
+		t.Errorf("padded anyway: %q", line)
+	}
+	// The bounded row still truncates, which is what a terminal needs.
+	bounded := th.Row(c, RowOpts{Width: 100, LocalHost: "laptop"})
+	if Width(bounded) != 100 {
+		t.Errorf("bounded row is %d columns, want 100", Width(bounded))
+	}
+}
