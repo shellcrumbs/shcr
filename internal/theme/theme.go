@@ -34,7 +34,12 @@ var (
 
 	colorAccent = lipgloss.AdaptiveColor{Light: "#0969da", Dark: "#58a6ff"}
 	colorMuted  = lipgloss.AdaptiveColor{Light: "#6e7781", Dark: "#8b949e"}
-	colorFrame  = lipgloss.AdaptiveColor{Light: "#d0d7de", Dark: "#30363d"}
+	colorFrame  = lipgloss.AdaptiveColor{Light: "#8c959f", Dark: "#30363d"}
+
+	colorOperator = lipgloss.AdaptiveColor{Light: "#8250df", Dark: "#bc8cff"}
+	colorFlag     = lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#d29922"}
+	colorKeyword  = lipgloss.AdaptiveColor{Light: "#0550ae", Dark: "#79c0ff"}
+	colorString   = lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"}
 
 	// A chip is a surface tint, not a hue — low enough contrast that a row of
 	// them reads as one quiet block beside the command.
@@ -79,6 +84,10 @@ type Theme struct {
 	Match    lipgloss.Style
 	Selected lipgloss.Style
 	Label    lipgloss.Style
+	Operator lipgloss.Style
+	Flag     lipgloss.Style
+	Keyword  lipgloss.Style
+	String   lipgloss.Style
 	// Cursor draws the character the caret is sitting on, by swapping it with
 	// the background so the block reads as a cursor rather than a highlight.
 	Cursor lipgloss.Style
@@ -170,11 +179,16 @@ func buildOn(r *lipgloss.Renderer, bg lipgloss.TerminalColor) *Theme {
 		Title:    base.Foreground(colorAccent).Bold(true),
 		Muted:    base.Foreground(colorMuted),
 		Accent:   base.Foreground(colorAccent),
-		Match:    base.Foreground(colorAccent).Bold(true),
+		Match:    base.Foreground(colorAccent).Bold(true).Underline(true),
 		Selected: base.Bold(true),
 		Label:    base.Foreground(colorMuted),
 		Cursor:   base.Reverse(true),
 		Error:    base.Foreground(colorFailed).Bold(true),
+
+		Operator: base.Foreground(colorOperator).Bold(true),
+		Flag:     base.Foreground(colorFlag),
+		Keyword:  base.Foreground(colorKeyword).Bold(true),
+		String:   base.Foreground(colorString),
 
 		chipInfo: chip.Foreground(colorChipFG),
 		chipExit: chip.Foreground(colorFailed),
@@ -274,7 +288,7 @@ func (t *Theme) Dot(status string) string {
 }
 
 // ImportedGlyph marks a command recovered from a shell's history file.
-const ImportedGlyph = "↧"
+const ImportedGlyph = "·"
 
 // Mark is the indicator for one row. An imported command gets its own muted
 // glyph rather than a green tick: nothing watched it run, its exit code is

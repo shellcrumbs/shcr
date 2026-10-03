@@ -115,23 +115,31 @@ func (m *Model) renderTop(inner int) string {
 	if m.query != "" || statusCycle[m.statusIdx] != "" {
 		switch n := len(m.results); {
 		case n >= refineCandidates:
-			count = m.theme.Muted.Render(fmt.Sprintf("%d+ matches ", refineCandidates))
+			count = m.theme.Muted.Render(fmt.Sprintf("%d+ matches", refineCandidates))
 		case n == 1:
-			count = m.theme.Muted.Render("1 match ")
+			count = m.theme.Muted.Render("1 match")
 		default:
-			count = m.theme.Muted.Render(fmt.Sprintf("%d matches ", n))
+			count = m.theme.Muted.Render(fmt.Sprintf("%d matches", n))
 		}
 	}
 	// The active filter is announced in the border, with the same dot the rows
 	// use. With no filter there is nothing to say, so nothing is drawn.
 	right := ""
 	if f := statusCycle[m.statusIdx]; f != "" {
-		right = " " + m.theme.Dot(f) + m.theme.Muted.Render(" "+f) + " "
+		right = " " + m.theme.Dot(f) + m.theme.Muted.Render(" "+f)
 	}
-	fill := max(inner-1-len(title)-theme.Width(count)-theme.Width(right)-1, 0)
+	if count != "" {
+		if right != "" {
+			right = " " + count + " " + m.theme.Muted.Render("•") + right + " "
+		} else {
+			right = " " + count + " "
+		}
+	} else if right != "" {
+		right = right + " "
+	}
+	fill := max(inner-len(title)-theme.Width(right)-2, 0)
 	return m.theme.Frame.Render("╭─") +
 		m.theme.Title.Render(title) +
-		count +
 		m.theme.Frame.Render(strings.Repeat("─", fill)) +
 		right +
 		m.theme.Frame.Render("─╮")
@@ -145,6 +153,8 @@ func (m *Model) renderQuery(inner int) string {
 	caret := max(0, min(m.caret, len(r)))
 	var typed string
 	switch {
+	case len(r) == 0:
+		typed = m.theme.Match.Render("▊") + m.theme.Muted.Render(" search history...")
 	case caret >= len(r):
 		typed = string(r) + m.theme.Match.Render("▊")
 	default:
@@ -198,9 +208,9 @@ func (m *Model) renderHints() string {
 	}
 	var parts []string
 	for _, p := range pairs {
-		parts = append(parts, m.theme.Label.Bold(true).Render(p[0])+" "+m.theme.Muted.Render(p[1]))
+		parts = append(parts, m.theme.Accent.Bold(true).Render(p[0])+" "+m.theme.Muted.Render(p[1]))
 	}
-	return "  " + strings.Join(parts, m.theme.Muted.Render("  "))
+	return "  " + strings.Join(parts, m.theme.Muted.Render("   "))
 }
 
 func (m *Model) renderList(w int) []string {
@@ -279,12 +289,17 @@ func (m *Model) renderDetail(w int) []string {
 		lines[room-1] = last
 	}
 	for _, line := range lines {
-		out = append(out, " "+m.theme.Highlight(line, theme.Tokens(m.query)))
+		out = append(out, " "+m.theme.HighlightCommand(line, theme.Tokens(m.query)))
 	}
 	out = append(out, meta...)
 	if len(session) > 0 && len(out)+len(session) < budget {
 		out = append(out, "")
 		out = append(out, session...)
+	}
+	if budget-len(out) >= 3 {
+		out = append(out, "")
+		out = append(out, " "+m.theme.Accent.Render("⏎")+" "+m.theme.Muted.Render("insert to prompt")+"  "+
+			m.theme.Accent.Render("^Y")+" "+m.theme.Muted.Render("copy"))
 	}
 	return out
 }
@@ -311,7 +326,7 @@ func (m *Model) detailMeta(c store.Command, pw int) []string {
 	// single run — and the count is part of why it is placed where it is.
 	if st, ok := m.statIndex[c.Command]; ok {
 		if summary := st.Summary(); summary != "" {
-			out = append(out, " "+m.theme.Muted.Render(theme.Truncate(summary, pw)))
+			out = append(out, " "+m.theme.Accent.Render("📊 ")+m.theme.Muted.Render(theme.Truncate(summary, pw-4)))
 		}
 	}
 
@@ -347,22 +362,31 @@ func (m *Model) detailSession(pw int) []string {
 	if c == nil || (len(m.before) == 0 && len(m.after) == 0) {
 		return nil
 	}
-	out := []string{" " + m.theme.Label.Render("session")}
-	line := func(text string, current bool) string {
-		t := theme.Truncate(theme.FirstLine(text), pw-3)
+	out := []string{" " + m.theme.Label.Bold(true).Render("session")}
+	total := len(m.before) + 1 + len(m.after)
+	idx := 0
+	line := func(text string, current bool, isLast bool) string {
+		t := theme.Truncate(theme.FirstLine(text), pw-5)
 		if current {
-			return " " + m.theme.Accent.Render("▌") + " " + m.theme.Accent.Render(t)
+			return " " + m.theme.Accent.Render("├──❯ ") + m.theme.Accent.Bold(true).Render(t)
 		}
-		return "   " + m.theme.Muted.Render(t)
+		branch := "├── "
+		if isLast {
+			branch = "└── "
+		}
+		return " " + m.theme.Frame.Render(branch) + m.theme.Muted.Render(t)
 	}
 	// before is newest-first from the query; read it backwards so the whole
 	// block runs in the order the commands were typed.
 	for i := len(m.before) - 1; i >= 0; i-- {
-		out = append(out, line(m.before[i].Command, false))
+		idx++
+		out = append(out, line(m.before[i].Command, false, idx == total))
 	}
-	out = append(out, line(c.Command, true))
+	idx++
+	out = append(out, line(c.Command, true, idx == total))
 	for _, n := range m.after {
-		out = append(out, line(n.Command, false))
+		idx++
+		out = append(out, line(n.Command, false, idx == total))
 	}
 	return out
 }

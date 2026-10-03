@@ -202,7 +202,11 @@ func Truncate(s string, w int) string {
 		b.WriteString(g.Str())
 		used += cw
 	}
-	return b.String() + "…"
+	trimmed := strings.TrimRight(b.String(), ".")
+	if uniseg.StringWidth(trimmed) == 0 {
+		return "…"
+	}
+	return trimmed + "…"
 }
 
 // Wrap breaks text into lines of at most w columns, again by grapheme rather
@@ -378,3 +382,65 @@ func (t *Theme) Highlight(text string, tokens []string) string {
 	}
 	return b.String()
 }
+
+// HighlightCommand applies shell syntax highlighting and search token matching
+// to a line of shell command text.
+func (t *Theme) HighlightCommand(text string, tokens []string) string {
+	if text == "" {
+		return ""
+	}
+	words := splitKeepingSpaces(text)
+	var b strings.Builder
+	nextIsCmd := true
+
+	for _, w := range words {
+		if strings.TrimSpace(w) == "" {
+			b.WriteString(t.body(w))
+			continue
+		}
+
+		// If a search token matches inside this word, prioritize match highlighting.
+		hasMatch := false
+		lowerW := strings.ToLower(w)
+		for _, tok := range tokens {
+			if tok != "" && strings.Contains(lowerW, tok) {
+				hasMatch = true
+				break
+			}
+		}
+
+		clean := strings.Trim(w, "\"'`()[]{}")
+		isOp := w == "|" || w == "||" || w == "&&" || w == ";" || w == "&" ||
+			w == ">" || w == ">>" || w == "<" || w == "2>" || w == "1>" || w == "&>"
+		isFlag := strings.HasPrefix(clean, "-")
+		isStr := (strings.HasPrefix(w, "\"") && strings.HasSuffix(w, "\"") && len(w) >= 2) ||
+			(strings.HasPrefix(w, "'") && strings.HasSuffix(w, "'") && len(w) >= 2)
+
+		if hasMatch {
+			b.WriteString(t.Highlight(w, tokens))
+		} else {
+			switch {
+			case isOp:
+				b.WriteString(t.Operator.Render(w))
+			case isFlag:
+				b.WriteString(t.Flag.Render(w))
+			case isStr:
+				b.WriteString(t.String.Render(w))
+			case nextIsCmd:
+				b.WriteString(t.Keyword.Render(w))
+			default:
+				b.WriteString(t.body(w))
+			}
+		}
+
+		if isOp {
+			nextIsCmd = true
+		} else if clean == "sudo" || clean == "time" || clean == "nohup" || clean == "exec" || clean == "doas" {
+			nextIsCmd = true
+		} else {
+			nextIsCmd = false
+		}
+	}
+	return b.String()
+}
+

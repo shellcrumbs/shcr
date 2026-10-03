@@ -180,16 +180,20 @@ func (t *Theme) trailing(c store.Command, o RowOpts, level int) string {
 		case c.Status == store.StatusRunning && o.Now > c.StartTime && c.StartTime > 0:
 			dur = t.chipInfo.Render(Duration(o.Now - c.StartTime))
 		}
-		parts = append(parts, t.padLeft(dur, durationSlot))
+		if dur != "" {
+			parts = append(parts, t.padLeft(dur, durationSlot))
+		}
 
 		// The exit code only earns ink when it is not zero: a green tick already
 		// says "exit 0", and a column of zeroes buries the 127 you are looking
-		// for. The slot is still reserved so the column stays straight.
+		// for.
 		exit := ""
 		if c.ExitCode != nil && *c.ExitCode != 0 {
 			exit = t.chipExit.Render(strconv.Itoa(*c.ExitCode))
 		}
-		parts = append(parts, t.padLeft(exit, exitSlot))
+		if exit != "" {
+			parts = append(parts, t.padLeft(exit, exitSlot))
+		}
 
 		if o.ShowAge && o.Now > 0 {
 			// One column of the slot is margin: the trailing group sits flush
