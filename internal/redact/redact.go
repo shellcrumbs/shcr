@@ -102,7 +102,7 @@ var builtinRules = []Rule{
 	},
 	{
 		Name:   "password-flag",
-		Re:     regexp.MustCompile(`(?i)(--?(?:password|passwd|token|api-?key|secret)[= ])(?:"([^"]*)"|'([^']*)'|([^\s;|&]+))`),
+		Re:     regexp.MustCompile(`(?i)(?:^|\s)(--?(?:password|passwd|token|api-?key|secret)[= ])(?:"([^"]*)"|'([^']*)'|([^\s;|&]+))`),
 		Action: ActionRedact, Group: 0,
 	},
 	{

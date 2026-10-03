@@ -69,6 +69,9 @@ func TestLeavesOrdinaryCommandsAlone(t *testing.T) {
 		"tar -xzf archive.tar.gz",
 		"make -j8 all",
 		"python3 -m pytest tests/",
+		// Commands with "password" embedded in compound words must not trigger the password-flag rule.
+		"bin/console domjudge:reset-user-password 'admin' 'fakePass123'",
+		"manage.py changepassword admin",
 	}
 	for _, cmd := range ordinary {
 		got, action, fired := r.Apply(cmd)
