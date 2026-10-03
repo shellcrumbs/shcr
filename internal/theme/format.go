@@ -443,4 +443,3 @@ func (t *Theme) HighlightCommand(text string, tokens []string) string {
 	}
 	return b.String()
 }
-
