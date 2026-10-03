@@ -332,23 +332,23 @@ func (m *Model) detailMeta(c store.Command, pw int) []string {
 
 	// Each row only when it has something to say. An imported command carries
 	// no directory, and a label with nothing after it spends a line saying so.
-	var rows [][2]string
+	var rows [][3]string
 	if c.Hostname != "" {
-		rows = append(rows, [2]string{"host", c.Hostname})
+		rows = append(rows, [3]string{"💻", "host", c.Hostname})
 	}
 	if d := theme.ShortenPath(c.Cwd); d != "" {
-		rows = append(rows, [2]string{"dir", d})
+		rows = append(rows, [3]string{"📁", "dir", d})
 	}
 	// Only when there is one. A row reading "branch —" spends a line saying
 	// nothing.
 	if c.GitBranch != nil && *c.GitBranch != "" {
-		rows = append(rows, [2]string{"branch", *c.GitBranch})
+		rows = append(rows, [3]string{"🌿", "branch", *c.GitBranch})
 	}
 	// The absolute time, because the row already carries how long ago it was.
 	// Two ways of saying "5 minutes" would leave neither saying when.
-	rows = append(rows, [2]string{"started", theme.Timestamp(c.StartTime)})
+	rows = append(rows, [3]string{"🕒", "started", theme.Timestamp(c.StartTime)})
 	for _, r := range rows {
-		out = append(out, " "+m.theme.Label.Render(theme.Pad(r[0], 9))+theme.Truncate(r[1], pw-10))
+		out = append(out, " "+r[0]+" "+m.theme.Label.Render(theme.Pad(r[1], 8))+theme.Truncate(r[2], pw-13))
 	}
 	return out
 }
